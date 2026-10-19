@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 700" role="img" aria-label="NoFrame gift card">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1b1b21"/>
+      <stop offset="55%" stop-color="#241a2e"/>
+      <stop offset="100%" stop-color="#120d18"/>
+    </linearGradient>
+    <linearGradient id="foil" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#F5D67B"/>
+      <stop offset="45%" stop-color="#E8B44A"/>
+      <stop offset="100%" stop-color="#F7E3A6"/>
+    </linearGradient>
+    <linearGradient id="ribbon" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#D946EF"/>
+      <stop offset="100%" stop-color="#8B2FD0"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#FFC45C" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#FFC45C" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="900" height="700" fill="#0d0d10"/>
+  <circle cx="450" cy="330" r="360" fill="url(#glow)"/>
+
+  <!-- card -->
+  <g transform="translate(120 190)">
+    <rect x="0" y="0" width="660" height="380" rx="26" fill="url(#bg)" stroke="#3a3145" stroke-width="2"/>
+    <rect x="0" y="0" width="660" height="380" rx="26" fill="none" stroke="url(#foil)" stroke-width="2" opacity="0.55"/>
+
+    <!-- snowflake motif -->
+    <g stroke="#F5D67B" stroke-width="4" stroke-linecap="round" opacity="0.5" transform="translate(560 96) scale(1.7)">
+      <line x1="0" y1="-26" x2="0" y2="26"/>
+      <line x1="-26" y1="0" x2="26" y2="0"/>
+      <line x1="-18" y1="-18" x2="18" y2="18"/>
+      <line x1="18" y1="-18" x2="-18" y2="18"/>
+      <line x1="0" y1="-26" x2="-7" y2="-18"/>
+      <line x1="0" y1="-26" x2="7" y2="-18"/>
+      <line x1="0" y1="26" x2="-7" y2="18"/>
+      <line x1="0" y1="26" x2="7" y2="18"/>
+    </g>
+
+    <!-- ribbon -->
+    <rect x="0" y="176" width="660" height="34" fill="url(#ribbon)" opacity="0.9"/>
+    <rect x="292" y="0" width="46" height="380" fill="url(#ribbon)" opacity="0.9"/>
+    <g transform="translate(315 176)">
+      <path d="M0 0 C-52 -46 -96 -14 -66 14 C-46 32 -18 20 0 0 Z" fill="url(#ribbon)"/>
+      <path d="M0 0 C52 -46 96 -14 66 14 C46 32 18 20 0 0 Z" fill="url(#ribbon)"/>
+      <circle cx="0" cy="4" r="14" fill="#F5D67B"/>
+    </g>
+
+    <text x="46" y="86" font-family="Playfair Display, Georgia, serif" font-size="46" font-weight="800" fill="#FFFFFF" letter-spacing="1">NoFrame</text>
+    <text x="48" y="124" font-family="Inter, Arial, sans-serif" font-size="20" font-weight="700" letter-spacing="8" fill="url(#foil)">GIFT CARD</text>
+
+    <text x="46" y="330" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="600" fill="#EDE7F2" opacity="0.85">Luxury fashion · festive gifting</text>
+    <rect x="470" y="300" width="150" height="52" rx="10" fill="url(#foil)"/>
+    <text x="545" y="334" text-anchor="middle" font-family="Space Mono, monospace" font-size="24" font-weight="700" fill="#17111d">RS. VALUE</text>
+  </g>
+</svg>
