@@ -459,10 +459,29 @@ input,select,textarea{font-family:inherit;}
 
 /* ---------- TRUST / FEATURES STRIP ---------- */
 .features-strip{
-  background:var(--surface);
+  position:relative;
+  overflow:hidden;
+  background:
+    radial-gradient(560px 200px at 6% -40%,rgba(224,74,86,.22),transparent 70%),
+    radial-gradient(560px 200px at 94% -40%,rgba(52,168,110,.20),transparent 70%),
+    var(--surface);
   border-bottom:1px solid var(--line);
-  padding:32px 0;
+  padding:56px 0 44px;
 }
+/* christmas dressing: fairy-light garland across the top, snowbank below */
+.xmas-deco{position:absolute;inset:0;pointer-events:none;z-index:0;}
+.xmas-lights{position:absolute;top:0;left:0;width:100%;height:auto;}
+.xmas-bulb{
+  animation:xmas-twinkle 2.4s ease-in-out infinite;
+  transform-box:fill-box;transform-origin:center;
+}
+@keyframes xmas-twinkle{
+  0%,100%{opacity:1;}
+  50%{opacity:.35;}
+}
+.xmas-snowbank{position:absolute;bottom:-1px;left:0;width:100%;height:44px;}
+.features-strip .wrap{position:relative;z-index:1;}
+@media(prefers-reduced-motion:reduce){.xmas-bulb{animation:none;}}
 .features-grid{
   display:grid;
   grid-template-columns:repeat(4,1fr);
@@ -542,18 +561,24 @@ input,select,textarea{font-family:inherit;}
   letter-spacing:-.02em;
   line-height:1.05;
   margin-bottom:8px;
+  /* crisp heading rendering on HiDPI */
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+  text-rendering:optimizeLegibility;
+  text-shadow:0 2px 24px rgba(120,160,255,.25);
 }
 .ring-carousel-header p{
-  font-size:13px;
-  color:rgba(255,255,255,.38);
+  font-size:13.5px;
+  color:rgba(255,255,255,.55);
   letter-spacing:.04em;
+  -webkit-font-smoothing:antialiased;
 }
 
 /* 3-D scene container */
 .ring-scene{
   position:relative;
   width:100%;
-  height:520px;
+  height:390px;
   perspective:1100px;
   cursor:grab;
   touch-action:pan-y;
@@ -573,13 +598,13 @@ input,select,textarea{font-family:inherit;}
   will-change:transform;
 }
 
-/* Each card in the ring */
+/* Each card in the ring (compact sizing) */
 .ring-card{
   position:absolute;
-  width:200px;
-  height:290px;
-  left:-100px;
-  top:-145px;
+  width:148px;
+  height:212px;
+  left:-74px;
+  top:-106px;
   transform-origin:center center;
   transform-style:preserve-3d;
   cursor:pointer;
@@ -615,6 +640,9 @@ input,select,textarea{font-family:inherit;}
   opacity:.88;
   transition:opacity .3s ease;
   pointer-events:none;
+  /* photo quality: no browser upscaling blur on HiDPI, subtle crisp pass */
+  image-rendering:auto;
+  filter:contrast(1.06) saturate(1.05);
 }
 .ring-card.ring-active .ring-card-face img{opacity:1;}
 
@@ -638,19 +666,24 @@ input,select,textarea{font-family:inherit;}
   border-radius:0 0 14px 14px;
 }
 .ring-card-label .ring-cat-eyebrow{
-  font-family:'Space Mono',monospace;font-size:9px;
+  font-family:'Space Mono',monospace;font-size:9.5px;
   letter-spacing:.2em;text-transform:uppercase;
-  color:rgba(255,255,255,.5);margin-bottom:5px;
+  color:rgba(255,255,255,.62);margin-bottom:5px;
+  -webkit-font-smoothing:antialiased;
 }
 .ring-card-label h3{
-  font-family:var(--font-heading);font-size:16px;font-weight:700;
+  font-family:var(--font-heading);font-size:17px;font-weight:700;
   color:#fff;line-height:1.2;margin-bottom:6px;
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+  text-shadow:0 1px 10px rgba(0,0,10,.65);
 }
 .ring-card-label .ring-shop-cta{
-  font-size:9px;letter-spacing:.14em;text-transform:uppercase;
-  color:rgba(255,255,255,.55);
-  border-bottom:1px solid rgba(255,255,255,.28);
+  font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;
+  color:rgba(255,255,255,.68);
+  border-bottom:1px solid rgba(255,255,255,.35);
   padding-bottom:1px;display:inline-block;
+  -webkit-font-smoothing:antialiased;
 }
 .ring-card.ring-active .ring-card-label .ring-shop-cta{
   color:rgba(255,255,255,.9);border-color:rgba(255,255,255,.8);
@@ -660,7 +693,7 @@ input,select,textarea{font-family:inherit;}
 .ring-card-reflection{
   position:absolute;
   top:calc(100% + 4px);
-  left:0;right:0;height:90px;
+  left:0;right:0;height:64px;
   border-radius:0 0 14px 14px;
   overflow:hidden;
   pointer-events:none;
@@ -706,14 +739,14 @@ input,select,textarea{font-family:inherit;}
 
 /* Responsive */
 @media(max-width:900px){
-  .ring-scene{height:420px;}
-  .ring-card{width:160px;height:230px;left:-80px;top:-115px;}
+  .ring-scene{height:330px;}
+  .ring-card{width:124px;height:178px;left:-62px;top:-89px;}
   .ring-carousel-header{padding-top:40px;}
 }
 @media(max-width:560px){
-  .ring-scene{height:340px;perspective:700px;}
-  .ring-card{width:130px;height:188px;left:-65px;top:-94px;}
-  .ring-card-reflection{height:60px;}
+  .ring-scene{height:270px;perspective:700px;}
+  .ring-card{width:100px;height:144px;left:-50px;top:-72px;}
+  .ring-card-reflection{height:44px;}
   .ring-carousel-header{padding-top:28px;}
 }
 
@@ -1326,7 +1359,126 @@ select.sort-select{
 }
 
 /* ---------- PROFILE & AUTH ---------- */
-.auth-box{max-width:420px;margin:0 auto;background:var(--surface);border:1px solid var(--line);padding:36px;border-radius:var(--radius);box-shadow:var(--shadow-sm);}
+/* Login scene: an articulated desk lamp in a dark room. Pushing the lamp (or
+   simply touching the form) turns the light on — the beam sweeps in, the room
+   warms up and the card lifts to full brightness. */
+.auth-page{padding-top:36px;}
+.auth-scene{
+  position:relative;
+  display:grid;
+  grid-template-columns:minmax(240px,380px) minmax(0,460px);
+  gap:clamp(24px,5vw,64px);
+  align-items:center;
+  justify-content:center;
+  padding:clamp(28px,5vw,56px);
+  background:
+    radial-gradient(1.6px 1.6px at 18% 28%,rgba(255,255,255,.45),transparent 60%),
+    radial-gradient(1.4px 1.4px at 74% 18%,rgba(255,255,255,.4),transparent 60%),
+    radial-gradient(1.4px 1.4px at 42% 74%,rgba(255,255,255,.35),transparent 60%),
+    radial-gradient(1.6px 1.6px at 88% 62%,rgba(255,255,255,.4),transparent 60%),
+    radial-gradient(1.3px 1.3px at 8% 82%,rgba(255,255,255,.3),transparent 60%),
+    radial-gradient(1.3px 1.3px at 60% 44%,rgba(255,255,255,.3),transparent 60%),
+    linear-gradient(160deg,#0B0B12 0%,#101019 55%,#0A0A10 100%);
+  border:1px solid var(--line);
+  border-radius:var(--radius);
+  overflow:hidden;
+  box-shadow:0 30px 80px rgba(0,0,0,.55);
+}
+.lamp-rig{
+  position:relative;
+  display:flex;flex-direction:column;align-items:center;gap:14px;
+  z-index:1;
+}
+.lamp-btn{
+  display:block;width:min(100%,300px);padding:0;background:none;border:none;
+  transition:transform .25s var(--ease);
+}
+.lamp-btn:hover{transform:translateY(-3px);}
+.lamp-btn:active{transform:translateY(0) scale(.98);}
+.lamp-svg{display:block;width:100%;height:auto;}
+.lamp-bulb{
+  fill:#4A4536;
+  transition:fill .45s ease,filter .45s ease;
+}
+/* light colour chooser — golden is the default; scene-wide via --lamp-light */
+.auth-scene{--lamp-light:255,217,138;}
+.lamp-swatches{
+  display:flex;gap:12px;align-items:center;justify-content:center;
+}
+.lamp-swatch{
+  width:20px;height:20px;border-radius:50%;padding:0;
+  background:var(--sw);
+  border:2px solid rgba(255,255,255,.22);
+  box-shadow:0 0 0 0 rgba(0,0,0,0);
+  transition:transform .2s var(--ease),box-shadow .25s ease,border-color .25s ease;
+}
+.lamp-swatch:hover{transform:scale(1.18);border-color:rgba(255,255,255,.55);}
+.lamp-swatch.active{
+  border-color:#fff;
+  box-shadow:0 0 14px 2px var(--sw);
+  transform:scale(1.12);
+}
+.lamp-hint{
+  font-family:'Space Mono',monospace;font-size:11px;letter-spacing:.14em;
+  text-transform:uppercase;color:rgba(255,255,255,.45);text-align:center;
+  animation:hint-pulse 2.6s ease-in-out infinite;
+}
+@keyframes hint-pulse{0%,100%{opacity:.45;}50%{opacity:1;}}
+.lamp-beam{
+  position:absolute;top:34%;left:58%;
+  width:150%;height:150%;
+  background:conic-gradient(from 118deg at 0% 0%,transparent 0deg,rgba(var(--lamp-light),.36) 14deg,rgba(var(--lamp-light),.12) 30deg,transparent 46deg);
+  clip-path:polygon(0 0,100% 28%,100% 78%,0 14%);
+  opacity:0;
+  transition:opacity .6s ease,background .5s ease;
+  pointer-events:none;
+  filter:blur(2px);
+}
+/* lit state — golden pool of light + the site's violet/blue system ambience */
+.auth-scene[data-lit="true"]{
+  background:
+    radial-gradient(1.6px 1.6px at 18% 28%,rgba(255,255,255,.45),transparent 60%),
+    radial-gradient(1.4px 1.4px at 74% 18%,rgba(255,255,255,.4),transparent 60%),
+    radial-gradient(1.4px 1.4px at 42% 74%,rgba(255,255,255,.35),transparent 60%),
+    radial-gradient(760px 460px at 32% 40%,rgba(var(--lamp-light),.18),transparent 70%),
+    radial-gradient(680px 420px at 88% 12%,rgba(112,0,255,.16),transparent 70%),
+    radial-gradient(560px 380px at 96% 92%,rgba(60,120,255,.12),transparent 70%),
+    linear-gradient(160deg,#141220 0%,#171426 55%,#0C0B14 100%);
+}
+.auth-scene[data-lit="true"] .lamp-bulb{
+  fill:rgb(var(--lamp-light));
+  filter:drop-shadow(0 0 14px rgba(var(--lamp-light),.9));
+}
+.auth-scene[data-lit="true"] .lamp-swatch.active{border-color:#fff;}
+.auth-scene[data-lit="true"] .lamp-beam{opacity:1;}
+.auth-scene[data-lit="true"] .lamp-hint{animation:none;color:rgba(var(--lamp-light),.85);}
+.auth-scene .auth-card{
+  opacity:.55;
+  transform:translateY(6px);
+  filter:saturate(.7) brightness(.85);
+  transition:opacity .6s ease,transform .6s ease,filter .6s ease;
+}
+.auth-scene[data-lit="true"] .auth-card{
+  opacity:1;transform:none;filter:none;
+}
+@media(max-width:820px){
+  .auth-scene{grid-template-columns:1fr;justify-items:center;text-align:left;}
+  .lamp-rig{width:100%;}
+  .lamp-btn{width:180px;}
+  .lamp-beam{display:none;}
+}
+.auth-box{max-width:460px;margin:0 auto;background:var(--surface);border:1px solid var(--line);padding:40px 40px 44px;border-radius:var(--radius);box-shadow:var(--shadow-sm);}
+/* roomier sign-in fields: taller inputs, more breathing room between rows */
+.auth-box .form-row{margin-bottom:24px;}
+.auth-box .form-row label{margin-bottom:10px;font-size:11.5px;}
+.auth-box .form-row input{
+  padding:16px 18px;
+  font-size:15px;
+  min-height:54px;
+  border-radius:12px;
+}
+.auth-box .form-row input::placeholder{color:rgba(255,255,255,.32);}
+.auth-box .btn-full{min-height:56px;font-size:14.5px;letter-spacing:.03em;border-radius:12px;}
 .auth-tabs{display:flex;gap:0;margin-bottom:32px;border-bottom:1px solid var(--line);}
 .auth-tab{flex:1;text-align:center;padding:14px;font-size:13px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-soft);border-bottom:2px solid transparent;margin-bottom:-1px;}
 .auth-tab.active{color:#FFFFFF;border-color:var(--magenta);}
@@ -1965,13 +2117,10 @@ select.sort-select{
 /* ============================================================
    OBSIDIAN SHELL THEME — site-wide (cursor, colour, type, chrome)
    ============================================================ */
-:root{
-  /* violet ring cursor, drawn as inline SVG so nothing is downloaded */
-  --nf-cursor:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 26 26"><circle cx="13" cy="13" r="8.2" fill="none" stroke="%23D946EF" stroke-width="1.6" stroke-opacity=".95"/><circle cx="13" cy="13" r="2.4" fill="%23B98BFF"/></svg>') 13 13, auto;
-  --nf-cursor-pointer:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30"><circle cx="15" cy="15" r="12" fill="rgba(112,0,255,0.18)" stroke="%23B98BFF" stroke-width="1.8"/><circle cx="15" cy="15" r="3.2" fill="%23D946EF"/></svg>') 15 15, pointer;
-}
-html,body{cursor:var(--nf-cursor);}
-a[href],button,select,summary,label,[role="button"],[onclick],.product-card,.brand-chip,.hero-dot,.hero-arrow,.pc-wish,.size-btn,.swatch-btn{cursor:var(--nf-cursor-pointer);}
+/* Mouse cursor is back to the normal system cursor — no custom ring cursor.
+   Only the standard affordances remain (pointer on links/controls, caret in
+   fields, not-allowed on disabled controls), all supplied by the browser. */
+a[href],button,select,summary,label,[role="button"],[onclick],.product-card,.brand-chip,.hero-dot,.hero-arrow,.pc-wish,.size-btn,.swatch-btn{cursor:pointer;}
 input,textarea{cursor:text;}
 .btn:disabled,button:disabled{cursor:not-allowed;}
 

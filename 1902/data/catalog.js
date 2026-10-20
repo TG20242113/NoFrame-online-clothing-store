@@ -19,6 +19,8 @@ const STORE_CATEGORIES = [
   {id:'womens-shoes',name:"Women's Heels & Footwear",coverImage:'https://images.unsplash.com/photo-1543163521-1bf539c55dd2?auto=format&fit=crop&w=900&q=85'},
   {id:'womens-trousers',name:"Women's Pants & Denim",coverImage:'https://images.unsplash.com/photo-1541099649105-f69ad21f3246?auto=format&fit=crop&w=900&q=85'},
   {id:'children',name:"Children's Fashion",coverImage:'../images/children/01.jpg'},
+  {id:'womens-underwear',name:"Women's Underwear",coverImage:'https://images.unsplash.com/photo-1571945153237-4929e783af4a?auto=format&fit=crop&w=900&q=85'},
+  {id:'mens-underwear',name:"Men's Underwear",coverImage:'https://images.unsplash.com/photo-1618354691373-d851c5c3a990?auto=format&fit=crop&w=900&q=85'},
   {id:'gift-cards',name:'Gift Cards',coverImage:'../assets/gift-card.svg'},
 ];
 
@@ -54,6 +56,8 @@ const STORE_PRODUCTS = {
     {title:'Lightweight Casual Everyday Pant',price:2890,stock:25,tags:['new'],images:['../images/mens-trousers/08.jpg','https://images.unsplash.com/photo-1479064555552-3ef4979f8908?auto=format&fit=crop&w=900&q=85']},
     {title:'Classic Straight Cut Formal Pant',price:3890,discountPrice:2990,stock:18,tags:['sale'],images:['../images/mens-trousers/10.jpg','https://images.unsplash.com/photo-1624378439575-d8705ad7ae80?auto=format&fit=crop&w=900&q=85']},
     {title:'Washed Faded Denim Jeans',price:5490,discountPrice:4490,stock:14,tags:['featured','trending'],images:['../images/mens-trousers/11.jpg','https://images.unsplash.com/photo-1541099649105-f69ad21f3246?auto=format&fit=crop&w=900&q=85']},
+    {id:'br-levis-jeans', title:'Levi\u2019s 501 Original Fit Jeans',price:8990,discountPrice:7490,stock:10,tags:['featured'],images:['../images/mens-trousers/12.jpg','https://images.unsplash.com/photo-1541099649105-f69ad21f3246?auto=format&fit=crop&w=900&q=85']},
+    {id:'br-nike-joggers', title:'Nike Club Fleece Jogger Pants',price:5990,discountPrice:4990,stock:15,tags:['sale','trending'],images:['../images/mens-trousers/02.jpg','https://images.unsplash.com/photo-1479064555552-3ef4979f8908?auto=format&fit=crop&w=900&q=85']},
     {title:'Distressed Patch Denim Casual Jeans',price:4990,stock:13,tags:['new'],images:['../images/mens-trousers/12.jpg','https://images.unsplash.com/photo-1541099649105-f69ad21f3246?auto=format&fit=crop&w=900&q=85']},
   ],
   'mens-others': [
@@ -84,6 +88,9 @@ const STORE_PRODUCTS = {
     {title:'Minimalist Short-Sleeve Resort Shirt',price:3490,discountPrice:2790,stock:19,tags:['sale'],images:['../images/mens-shirts/11.jpg','https://images.unsplash.com/photo-1598033129183-c4f50c736f10?auto=format&fit=crop&w=900&q=85']},
     {title:'Minimalist Short-Sleeve Resort Shirt',price:3490,discountPrice:2790,stock:19,tags:['sale'],images:['../images/mens-shirts/12.jpg','https://images.unsplash.com/photo-1598033129183-c4f50c736f10?auto=format&fit=crop&w=900&q=85']},
     {title:'Minimalist Short-Sleeve Resort Shirt',price:3490,discountPrice:2790,stock:19,tags:['sale'],images:['../images/mens-shirts/13.jpg','https://images.unsplash.com/photo-1598033129183-c4f50c736f10?auto=format&fit=crop&w=900&q=85']},
+    {id:'br-tommy-shirt', title:'Tommy Hilfiger Check Casual Shirt',price:6490,discountPrice:5290,stock:12,tags:['featured','bestseller'],images:['../images/mens-shirts/01.jpg','https://images.unsplash.com/photo-1596755094514-f87e34085b2c?auto=format&fit=crop&w=900&q=85']},
+    {id:'br-zara-shirt-m', title:'Zara Oversized Cotton Shirt',price:4790,stock:15,tags:['new','trending'],images:['../images/mens-shirts/05.jpg','https://images.unsplash.com/photo-1602810318383-e386cc2a3ccf?auto=format&fit=crop&w=900&q=85']},
+    {id:'br-nike-hoodie', title:'Nike Sportswear Fleece Hoodie',price:7490,discountPrice:6290,stock:14,tags:['sale','trending'],images:['../images/mens-tshirts/02.jpg','https://images.unsplash.com/photo-1556821840-3a63f95609a7?auto=format&fit=crop&w=900&q=85']}
   ],
   'mens-shoes': [
     {title:'Minimalist Leather Street Sneaker',price:6890,discountPrice:5490,stock:16,tags:['bestseller','featured'],images:['../images/mens-shoes/01.jpg','https://images.unsplash.com/photo-1549298916-b41d501d3772?auto=format&fit=crop&w=900&q=85']},
@@ -94,6 +101,8 @@ const STORE_PRODUCTS = {
     {title:'Nautical Canvas Deck Boat Shoes',price:5490,stock:20,tags:['new'],images:['../images/mens-shoes/07.jpg','https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a?auto=format&fit=crop&w=900&q=85']},
     {title:'Nautical Canvas Deck Boat Shoes',price:5490,stock:20,tags:['new'],images:['../images/mens-shoes/09.jpg','https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a?auto=format&fit=crop&w=900&q=85']},
     {title:'Nautical Canvas Deck Boat Shoes',price:5490,stock:20,tags:['new'],images:['../images/mens-shoes/06.jpg','https://images.unsplash.com/photo-1595950653106-6c9ebd614d3a?auto=format&fit=crop&w=900&q=85']},
+    {id:'br-adidas-shoe', title:'Adidas Originals Court Sneakers',price:9900,discountPrice:8400,stock:11,tags:['featured','bestseller'],images:['https://images.unsplash.com/photo-1584735175315-9d5df23860e6?auto=format&fit=crop&w=900&q=85','../images/mens-shoes/03.jpg']},
+    {id:'br-puma-shoe', title:'Puma Suede Classic Street Sneakers',price:8900,stock:13,tags:['new','trending'],images:['https://images.unsplash.com/photo-1606107557195-0e29a4b5b4aa?auto=format&fit=crop&w=900&q=85','../images/mens-shoes/07.jpg']}
   ],
   'mens-tshirts': [
     {title:'Heavyweight Organic Cotton Tee',price:2290,discountPrice:1790,stock:35,tags:['bestseller','featured'],images:['../images/mens-tshirts/01.jpg','https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=900&q=85']},
@@ -106,6 +115,9 @@ const STORE_PRODUCTS = {
     {title:'Flexible Active Performance Tee',price:2390,stock:25,tags:['new'],images:['../images/mens-tshirts/06.jpg','https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=900&q=85']},
     {title:'Flexible Active Performance Tee',price:2390,stock:25,tags:['new'],images:['../images/mens-tshirts/05.jpg','https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=900&q=85']},
     {title:'Flexible Active Performance Tee',price:2390,stock:25,tags:['new'],images:['../images/mens-tshirts/04.jpg','https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=900&q=85']},
+    {id:'br-nike-tee', title:'Nike Dri-FIT Training Tee',price:3490,stock:26,tags:['new','featured'],images:['https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=900&q=85','../images/mens-tshirts/05.jpg']},
+    {id:'br-tommy-polo', title:'Tommy Hilfiger Classic Piqué Polo',price:4990,discountPrice:3990,stock:17,tags:['bestseller','featured'],images:['https://images.unsplash.com/photo-1581655353564-df123a1eb820?auto=format&fit=crop&w=900&q=85','../images/mens-tshirts/10.jpg']},
+    {id:'br-adidas-tee', title:'Adidas Originals Trefoil Graphic Tee',price:2990,stock:22,tags:['new'],images:['https://images.unsplash.com/photo-1583743814966-8936f5b7be1a?auto=format&fit=crop&w=900&q=85','../images/mens-tshirts/07.jpg']}
   ],
   'womens-tshirts-shirts': [
     {title:'Relaxed Cotton Crewneck Tee',price:2190,discountPrice:1690,stock:30,tags:['bestseller'],images:['../images/womens-tshirts-shirts/05.jpg','https://images.unsplash.com/photo-1539109136881-3be0616acf4b?auto=format&fit=crop&w=900&q=85']},
@@ -124,6 +136,8 @@ const STORE_PRODUCTS = {
     {title:'Abstract Floral Print Silk Blouse',price:4290,discountPrice:3290,stock:12,tags:['sale'],images:['../images/womens-blouses/03.jpg','https://images.unsplash.com/photo-1503342217505-b0a15ec3261c?auto=format&fit=crop&w=900&q=85']},
     {title:'French Ruffle Sleeve Chiffon Blouse',price:4690,discountPrice:3690,stock:15,tags:['sale','trending'],images:['../images/womens-blouses/05.jpg','https://images.unsplash.com/photo-1485968579580-b6d095142e6e?auto=format&fit=crop&w=900&q=85']},
     {title:'French Ruffle Sleeve Chiffon Blouse',price:4690,discountPrice:3690,stock:15,tags:['sale','trending'],images:['../images/womens-blouses/02.jpg','https://images.unsplash.com/photo-1485968579580-b6d095142e6e?auto=format&fit=crop&w=900&q=85']},
+    {id:'br-zara-blouse', title:'Zara Satin Fluid Blouse',price:4490,discountPrice:3590,stock:16,tags:['featured','trending'],images:['../images/womens-blouses/01.jpg','https://images.unsplash.com/photo-1485968579580-b6d095142e6e?auto=format&fit=crop&w=900&q=85']},
+    {id:'br-zara-shirt', title:'Zara Relaxed Linen-Blend Shirt',price:3990,stock:21,tags:['new'],images:['../images/womens-tshirts-shirts/07.jpg','https://images.unsplash.com/photo-1485968579580-b6d095142e6e?auto=format&fit=crop&w=900&q=85']}
   ],
   'womens-croptops': [
     {title:'Seamless Ribbed Crop Tank Top',price:1890,discountPrice:1490,stock:30,tags:['bestseller'],images:['../images/womens-croptops/05.jpg','https://images.unsplash.com/photo-1503342217505-b0a15ec3261c?auto=format&fit=crop&w=900&q=85']},
@@ -158,9 +172,12 @@ const STORE_PRODUCTS = {
     {title:'Chic Suede Ankle Boots',price:6890,discountPrice:5290,stock:10,tags:['sale','trending'],images:['../images/womens-shoes/05.jpg','https://images.unsplash.com/photo-1543163521-1bf539c55dd2?auto=format&fit=crop&w=900&q=85']},
     {title:'Chic Suede Ankle Boots',price:6890,discountPrice:5290,stock:10,tags:['sale','trending'],images:['../images/womens-shoes/04.jpg','https://images.unsplash.com/photo-1543163521-1bf539c55dd2?auto=format&fit=crop&w=900&q=85']},
     {title:'Chic Suede Ankle Boots',price:6890,discountPrice:5290,stock:10,tags:['sale','trending'],images:['../images/womens-shoes/02.jpg','https://images.unsplash.com/photo-1543163521-1bf539c55dd2?auto=format&fit=crop&w=900&q=85']},
+    {id:'br-nike-wshoe', title:'Nike Air Zoom Women\u2019s Running Shoes',price:11900,discountPrice:9900,stock:9,tags:['featured','trending'],images:['https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=900&q=85','../images/womens-shoes/01.jpg']},
+    {id:'br-zara-heel', title:'Zara Square-Toe Leather Mules',price:5490,stock:13,tags:['new'],images:['../images/womens-shoes/05.jpg','https://images.unsplash.com/photo-1543163521-1bf539c55dd2?auto=format&fit=crop&w=900&q=85']}
   ],
   'womens-trousers': [
     {title:'Zara Regular Fit Straight Denim Jeans',price:4990,discountPrice:3890,stock:22,tags:['bestseller','featured'],images:['../images/womens-trousers/03.jpg','https://images.unsplash.com/photo-1541099649105-f69ad21f3246?auto=format&fit=crop&w=900&q=85']},
+    {id:'br-zara-jeans2', title:'Zara High-Rise Straight Jeans',price:4690,stock:19,tags:['new'],images:['../images/womens-trousers/05.jpg','https://images.unsplash.com/photo-1509631179647-0177331693ae?auto=format&fit=crop&w=900&q=85']},
     {title:'Tailored High-Waist Office Trousers',price:4490,stock:18,tags:['new'],images:['../images/womens-trousers/02.jpg','https://images.unsplash.com/photo-1509631179647-0177331693ae?auto=format&fit=crop&w=900&q=85']},
     {title:'Wide Leg Relaxed Linen Trousers',price:3890,discountPrice:2990,stock:20,tags:['sale'],images:['../images/womens-trousers/15.jpg','https://images.unsplash.com/photo-1541099649105-f69ad21f3246?auto=format&fit=crop&w=900&q=85']},
     {title:'Wide Leg Relaxed Linen Trousers',price:3890,discountPrice:2990,stock:20,tags:['sale'],images:['../images/womens-trousers/12.jpg','https://images.unsplash.com/photo-1541099649105-f69ad21f3246?auto=format&fit=crop&w=900&q=85']},
@@ -172,6 +189,22 @@ const STORE_PRODUCTS = {
     {title:'Wide Leg Relaxed Linen Trousers',price:3890,discountPrice:2990,stock:20,tags:['sale'],images:['../images/womens-trousers/07.jpg','https://images.unsplash.com/photo-1541099649105-f69ad21f3246?auto=format&fit=crop&w=900&q=85']},
     {title:'Wide Leg Relaxed Linen Trousers',price:3890,discountPrice:2990,stock:20,tags:['sale'],images:['../images/womens-trousers/04.jpg','https://images.unsplash.com/photo-1541099649105-f69ad21f3246?auto=format&fit=crop&w=900&q=85']},
     {title:'Wide Leg Relaxed Linen Trousers',price:3890,discountPrice:2990,stock:20,tags:['sale'],images:['../images/womens-trousers/01.jpg','https://images.unsplash.com/photo-1541099649105-f69ad21f3246?auto=format&fit=crop&w=900&q=85']},
+  ],
+  'womens-underwear': [
+    {id:'uw-w1', title:'Seamless Everyday Bikini Briefs (3-Pack)', price:2490, discountPrice:1990, stock:40, tags:['bestseller','featured'], colors:['white','beige','black'], images:['https://images.unsplash.com/photo-1571945153237-4929e783af4a?auto=format&fit=crop&w=900&q=85','https://images.unsplash.com/photo-1503342217505-b0a15ec3261c?auto=format&fit=crop&w=900&q=85']},
+    {id:'uw-w2', title:'Organic Cotton High-Waist Briefs', price:1890, stock:32, tags:['new'], colors:['beige','black','white'], images:['../images/womens-croptops/01.jpg','https://images.unsplash.com/photo-1571945153237-4929e783af4a?auto=format&fit=crop&w=900&q=85']},
+    {id:'uw-w3', title:'Lace Trim Brazilian Brief', price:1690, stock:26, tags:['new','trending'], colors:['black','rose','navy'], images:['../images/womens-croptops/02.jpg','https://images.unsplash.com/photo-1591673365407-d8dd1cf29270?auto=format&fit=crop&w=900&q=85']},
+    {id:'uw-w4', title:'Soft Modal Bralette — Wire Free', price:3290, discountPrice:2690, stock:18, tags:['sale','featured'], colors:['beige','grey','black'], images:['../images/womens-croptops/03.jpg','https://images.unsplash.com/photo-1503342217505-b0a15ec3261c?auto=format&fit=crop&w=900&q=85']},
+    {id:'uw-w5', title:'Cotton Camisole Vest Top', price:2790, stock:24, tags:['featured'], colors:['white','beige','black'], images:['../images/womens-tshirts-shirts/01.jpg','https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=900&q=85']},
+    {id:'uw-w6', title:'Seamless Thong Briefs (2-Pack)', price:1790, stock:35, tags:['new'], colors:['black','beige','white'], images:['../images/womens-croptops/04.jpg','https://images.unsplash.com/photo-1571945153237-4929e783af4a?auto=format&fit=crop&w=900&q=85']}
+  ],
+  'mens-underwear': [
+    {id:'uw-m1', title:'Classic Cotton Boxer Briefs (3-Pack)', price:2790, discountPrice:2290, stock:45, tags:['bestseller','featured'], colors:['black','navy','white'], images:['https://images.unsplash.com/photo-1618354691373-d851c5c3a990?auto=format&fit=crop&w=900&q=85','https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=900&q=85']},
+    {id:'uw-m2', title:'Ultra Soft Modal Trunks', price:2290, stock:30, tags:['new'], colors:['black','grey','navy'], images:['../images/mens-tshirts/02.jpg','https://images.unsplash.com/photo-1583743814966-8936f5b7be1a?auto=format&fit=crop&w=900&q=85']},
+    {id:'uw-m3', title:'Breathable Cotton Boxer Shorts', price:1990, stock:34, tags:['new','trending'], colors:['navy','white','grey'], images:['../images/mens-tshirts/03.jpg','https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?auto=format&fit=crop&w=900&q=85']},
+    {id:'uw-m4', title:'Ribbed Undershirt Vest (2-Pack)', price:2490, discountPrice:1990, stock:28, tags:['sale'], colors:['white','black','beige'], images:['../images/mens-tshirts/01.jpg','https://images.unsplash.com/photo-1603252109303-2751441dd157?auto=format&fit=crop&w=900&q=85']},
+    {id:'uw-m5', title:'Modal Boxer Briefs — 5 Pack', price:5490, discountPrice:4490, stock:20, tags:['featured'], colors:['black','navy','grey'], images:['https://images.unsplash.com/photo-1618354691373-d851c5c3a990?auto=format&fit=crop&w=900&q=85']},
+    {id:'uw-m6', title:'Everyday Cotton Briefs (5-Pack)', price:3190, stock:38, tags:['new'], colors:['white','navy','black'], images:['../images/mens-tshirts/04.jpg','https://images.unsplash.com/photo-1583743814966-8936f5b7be1a?auto=format&fit=crop&w=900&q=85']}
   ],
   'children': [
     {title:'Soft Organic Cotton Kids T-Shirt',price:1690,discountPrice:1290,stock:30,tags:['bestseller'],images:['../images/children/01.jpg','https://images.unsplash.com/photo-1519238263530-99bdd11df2ea?auto=format&fit=crop&w=900&q=85']},

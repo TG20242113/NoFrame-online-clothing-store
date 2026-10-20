@@ -118,6 +118,43 @@ function ensureGiftCards(){
   return changed;
 }
 
+/* New categories/products added to data/catalog.js later must show up even for
+   visitors whose DB was restored from a cached copy. Categories are merged by
+   id; catalog items that declare an explicit id (new underwear + brand lines)
+   are merged the same way, so nothing is ever duplicated. */
+function ensureCatalogDelta(){
+  let changed = false;
+  STORE_CATEGORIES.forEach(cat=>{
+    if(!DB.categories.some(c=>c.id===cat.id)){
+      DB.categories.push({id:cat.id, name:cat.name, coverImage:cat.coverImage||null});
+      changed = true;
+    }
+  });
+  Object.keys(STORE_PRODUCTS).forEach(catId=>{
+    const cat = STORE_CATEGORIES.find(c=>c.id===catId);
+    if(!cat) return;
+    STORE_PRODUCTS[catId].forEach(it=>{
+      if(!it.id) return;                       /* only explicitly-identified items */
+      if(DB.products.some(p=>p.id===it.id)) return;
+      DB.products.push({
+        id:it.id, title:it.title, category:catId, categoryName:cat.name,
+        price:it.price, discountPrice:it.discountPrice??null,
+        colors:it.colors||['black','white','navy','beige'],
+        sizes:it.sizes||['S','M','L','XL','2XL'],
+        images:it.images||[generateProductImage(catId, it.id)],
+        rating:it.rating||'4.6', reviewsCount:it.reviewsCount||(18+it.title.length),
+        stock:it.stock??20, tags:it.tags||['new'],
+        description:it.description||`A NoFrame signature ${cat.name.toLowerCase()} piece cut from premium materials, designed for everyday sophistication and effortless style.`,
+        createdAt:Date.now()-(hashStr(it.id)%20)*86400000
+      });
+      changed = true;
+    });
+  });
+  if(changed){
+    try{ localStorage.setItem('noframe-db-fallback', JSON.stringify(DB)); }catch(e){ console.warn(e); }
+  }
+}
+
 /* Only 3–4 items out of every ~10 in a sub-category stay on sale, so the
    sale badge keeps its meaning. Enforced at startup against seed data,
    the cached browser DB and MySQL-loaded DB alike. */
@@ -272,8 +309,8 @@ const OTHER_CATEGORY_IDS = ['caps-unisex','mens-others','womens-others'];
 
 function megaGroups(){
   return [
-    {key:'men',      title:'MEN',      ids:['mens-shirts','mens-tshirts','mens-trousers','mens-shoes','mens-others','caps-unisex']},
-    {key:'women',    title:'WOMEN',    ids:['frocks-women','womens-tshirts-shirts','womens-blouses','womens-croptops','womens-trousers','womens-shoes','womens-others']},
+    {key:'men',      title:'MEN',      ids:['mens-shirts','mens-tshirts','mens-trousers','mens-underwear','mens-shoes','mens-others','caps-unisex']},
+    {key:'women',    title:'WOMEN',    ids:['frocks-women','womens-tshirts-shirts','womens-blouses','womens-croptops','womens-trousers','womens-underwear','womens-shoes','womens-others']},
     {key:'children', title:'CHILDREN', ids:['children']},
     {key:'other',    title:'OTHER',    ids:['caps-unisex','gift-cards']}
   ];
@@ -283,11 +320,11 @@ function megaGroups(){
    own sub-categories — never the whole store menu. */
 const MEGA_PANELS = {
   men:{ cols:[
-    {title:'CLOTHING', ids:['mens-shirts','mens-tshirts','mens-trousers']},
+    {title:'CLOTHING', ids:['mens-shirts','mens-tshirts','mens-trousers','mens-underwear']},
     {title:'FOOTWEAR, CAPS & ACCESSORIES', ids:['mens-shoes','mens-others','caps-unisex']}
   ]},
   women:{ cols:[
-    {title:'CLOTHING', ids:['frocks-women','womens-tshirts-shirts','womens-blouses','womens-croptops','womens-trousers']},
+    {title:'CLOTHING', ids:['frocks-women','womens-tshirts-shirts','womens-blouses','womens-croptops','womens-trousers','womens-underwear']},
     {title:'SHOES & ACCESSORIES', ids:['womens-shoes','womens-others']}
   ]},
   children:{ cols:[
@@ -716,8 +753,28 @@ function observeScrambles(root){
 }
 
 /* ---------------- TRUST FEATURES STRIP ---------------- */
+/* Festive dressing for the trust strip: a sagging string of fairy lights with
+   twinkling bulbs across the top, plus a snowdrift banked along the bottom. */
+function xmasLightsSVG(){
+  const bulbColors = ['#FF5A6E','#FFC94D','#57D977','#B98BFF'];
+  let wire = 'M0,10';
+  for(let x=0; x<1440; x+=180){ wire += ` Q${x+90},46 ${x+180},10`; }
+  let dots = '';
+  for(let i=0, x=90; x<1440; x+=180, i++){
+    const c = bulbColors[i % bulbColors.length];
+    dots += `<circle cx="${x}" cy="34" r="13" fill="${c}" opacity=".20"/>`;
+    dots += `<circle class="xmas-bulb" cx="${x}" cy="34" r="7.5" fill="${c}" style="animation-delay:${(i%4)*0.55}s"/>`;
+  }
+  return `<svg class="xmas-lights" viewBox="0 0 1440 56" fill="none" aria-hidden="true"><path d="${wire}" stroke="rgba(255,255,255,.30)" stroke-width="2"/>${dots}</svg>`;
+}
+const XMAS_SNOWBANK = `<svg class="xmas-snowbank" viewBox="0 0 1440 44" preserveAspectRatio="none" fill="none" aria-hidden="true">
+  <path d="M0,44 L0,28 Q120,12 240,26 T480,24 T720,26 T960,24 T1200,28 T1440,26 L1440,44 Z" fill="rgba(255,255,255,.09)"/>
+  <path d="M0,44 L0,34 Q180,22 360,32 T720,32 T1080,30 T1440,34 L1440,44 Z" fill="rgba(255,255,255,.13)"/>
+</svg>`;
+
 function featuresStripHTML(){
   return `<section class="features-strip">
+    <div class="xmas-deco" aria-hidden="true">${xmasLightsSVG()}${XMAS_SNOWBANK}</div>
     <div class="wrap">
       <div class="features-grid">
         <div class="feature-item">
@@ -819,18 +876,27 @@ function ringRadius(n, cardW){
 
 /* HTML template for the whole section */
 function ringCarouselHTML(){
-  const cats = DB.categories.slice(0, 14);
+  /* Every sub-category gets a ring card (incl. the newer underwear lines),
+     plus an "Others" card that opens the caps/accessories catch-all listing. */
+  const othersCover = (catById('caps-unisex')||{}).coverImage || IMAGE_SETS.caps[0];
+  const cats = DB.categories.concat([{id:'others', name:'Others — Caps & Accessories', coverImage:othersCover, isOthers:true}]);
   RING.cards = cats;
   RING.count = cats.length;
   RING.angle = 0;
   RING.velocity = 0;
   RING.active = 0;
 
+  /* Ring cards are the visual centrepiece — ask Unsplash for the larger 1600px
+     rendition so they stay sharp on HiDPI screens. */
+  const ringHiRes = u => (typeof u==='string' && u.includes('images.unsplash.com'))
+    ? u.replace(/w=\d+/, 'w=1600').replace(/q=\d+/, 'q=90')
+    : u;
   const cardSlots = cats.map((cat, i) => {
-    const img = getCategoryImage(cat.id);
+    const img = ringHiRes(cat.isOthers ? cat.coverImage : getCategoryImage(cat.id));
+    const fallbackCat = cat.isOthers ? 'caps-unisex' : cat.id;
     return `<div class="ring-card" data-ri="${i}" onclick="ringCardClick(${i})">
       <div class="ring-card-face">
-        <img src="${img}" alt="${cat.name}" loading="lazy" onerror="imgFallback(this,'${cat.id}',700,900)">
+        <img src="${img}" alt="${cat.name}" loading="eager" decoding="async" onerror="imgFallback(this,'${fallbackCat}',700,900)">
         <div class="ring-card-label">
           <div class="ring-cat-eyebrow">Explore</div>
           <h3>${cat.name}</h3>
@@ -838,7 +904,7 @@ function ringCarouselHTML(){
         </div>
       </div>
       <div class="ring-card-reflection">
-        <img src="${img}" alt="" aria-hidden="true" loading="lazy" onerror="imgFallback(this,'${cat.id}',700,900)">
+        <img src="${img}" alt="" aria-hidden="true" loading="lazy" decoding="async" onerror="imgFallback(this,'${fallbackCat}',700,900)">
       </div>
     </div>`;
   }).join('');
@@ -868,7 +934,7 @@ function ringLayout(){
   const track = document.getElementById('ring-track');
   if(!track) return;
   const scene = document.getElementById('ring-scene');
-  const cardW = scene.offsetWidth < 600 ? 130 : scene.offsetWidth < 960 ? 160 : 200;
+  const cardW = scene.offsetWidth < 600 ? 100 : scene.offsetWidth < 960 ? 124 : 148;
   RING.radius = ringRadius(RING.count, cardW + 20);
 
   const angleStep = 360 / RING.count;
@@ -974,7 +1040,9 @@ function ringGoTo(index){
 function ringCardClick(i){
   if(RING.active === i){
     const cat = RING.cards[i];
-    if(cat) nav('#/category/' + cat.id);
+    if(!cat) return;
+    if(cat.isOthers) nav('#/others');      /* caps, watches, handbags catch-all */
+    else nav('#/category/' + cat.id);
   } else {
     ringGoTo(i);
   }
@@ -1145,7 +1213,7 @@ function saleScroll(dir){
 }
 
 /* Main brands — clicking one opens a brand store page with buy access. */
-const MAIN_BRANDS = ['Nike','Zara','Tommy Hilfiger','Casio','Seiko','Citizen','Coach'];
+const MAIN_BRANDS = ['Nike','Adidas','Puma','Levi\u2019s','Zara','Tommy Hilfiger','Casio','Seiko','Citizen','Coach'];
 function brandBarHTML(){
   return `
   <section class="section brand-bar-section">
@@ -1907,8 +1975,31 @@ function renderAuth(mode) {
   }
 
   $('#app').innerHTML = `
-  <div class="page wrap">
-    <div class="auth-box">
+  <div class="page wrap auth-page">
+    <div class="auth-scene" id="auth-scene" data-lit="false" onclick="litLamp(true)" onfocusin="litLamp(true)">
+      <div class="lamp-rig">
+        <button type="button" class="lamp-btn" id="lamp-btn" aria-label="Toggle the lamp" onclick="event.stopPropagation();toggleLamp();">
+          <svg class="lamp-svg" viewBox="0 0 330 362" fill="none" aria-hidden="true">
+            <ellipse cx="70" cy="340" rx="56" ry="14" fill="#1B1B22"/>
+            <rect x="52" y="314" width="36" height="28" rx="7" fill="#26262F"/>
+            <path d="M70 318 L132 212" stroke="#C9A24B" stroke-width="14" stroke-linecap="round"/>
+            <path d="M132 212 L212 144" stroke="#C9A24B" stroke-width="14" stroke-linecap="round"/>
+            <circle cx="132" cy="212" r="12" fill="#E8C87A"/>
+            <circle cx="212" cy="144" r="10" fill="#E8C87A"/>
+            <path d="M220 132 L302 176 L241 236 L200 152 Z" fill="#2A2A34" stroke="#C9A24B" stroke-width="5" stroke-linejoin="round"/>
+            <circle class="lamp-bulb" cx="268" cy="201" r="13" fill="#FFE7A8"/>
+          </svg>
+        </button>
+        <span class="lamp-hint" id="lamp-hint">Push me to turn on</span>
+        <div class="lamp-swatches" role="group" aria-label="Lamp light colour">
+          <button type="button" class="lamp-swatch active" data-lc="255,217,138" style="--sw:#FFD98A" title="Golden" aria-label="Golden light" onclick="event.stopPropagation();pickLampColor(this);"></button>
+          <button type="button" class="lamp-swatch" data-lc="185,139,255" style="--sw:#B98BFF" title="Violet" aria-label="Violet light" onclick="event.stopPropagation();pickLampColor(this);"></button>
+          <button type="button" class="lamp-swatch" data-lc="122,184,255" style="--sw:#7AB8FF" title="Ice Blue" aria-label="Ice blue light" onclick="event.stopPropagation();pickLampColor(this);"></button>
+          <button type="button" class="lamp-swatch" data-lc="255,123,229" style="--sw:#FF7BE5" title="Magenta" aria-label="Magenta light" onclick="event.stopPropagation();pickLampColor(this);"></button>
+        </div>
+        <span class="lamp-beam" aria-hidden="true"></span>
+      </div>
+      <div class="auth-box auth-card">
       ${returnUrl ? `
         <div class="return-url-alert">
           <span>🔒</span>
@@ -1945,8 +2036,38 @@ function renderAuth(mode) {
         <div class="form-row"><label>Confirm Password</label><input id="au-confirm-pass" type="password" placeholder="Confirm your password"></div>
         <button class="btn btn-primary btn-full" style="margin-top:16px;" onclick="doSignup()">Create Account</button>
       `}
+      </div>
     </div>
   </div>`;
+}
+
+/* The lamp scene: dark until the visitor pushes the lamp (or touches the
+   form), then the room warms up and the login card comes to full brightness. */
+function setLampLit(lit){
+  const scene = document.getElementById('auth-scene');
+  if(!scene) return;
+  scene.dataset.lit = lit ? 'true' : 'false';
+  const hint = document.getElementById('lamp-hint');
+  if(hint) hint.textContent = lit ? 'Light on — welcome back' : 'Push me to turn on';
+}
+function toggleLamp(){
+  const scene = document.getElementById('auth-scene');
+  if(!scene) return;
+  setLampLit(scene.dataset.lit !== 'true');
+}
+function litLamp(on){
+  const scene = document.getElementById('auth-scene');
+  if(!scene || scene.dataset.lit === 'true') return;
+  if(on !== false) setLampLit(true);
+}
+/* Light colour chooser — golden is the default look; the scene drives the
+   bulb, the beam and the warm bloom from one --lamp-light RGB triplet. */
+function pickLampColor(btn){
+  const scene = document.getElementById('auth-scene');
+  if(!scene) return;
+  scene.style.setProperty('--lamp-light', btn.dataset.lc || '255,217,138');
+  scene.querySelectorAll('.lamp-swatch').forEach(s=>s.classList.toggle('active', s===btn));
+  litLamp(true);
 }
 
 async function doLogin() {
@@ -2794,6 +2915,7 @@ function initSantaFloat(){
 (async function init(){
   await loadStorage();
   ensureGiftCards();
+  ensureCatalogDelta();
   enforceSaleQuota();
   renderFooter();
   renderRoute();
