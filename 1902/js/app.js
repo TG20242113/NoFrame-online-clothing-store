@@ -79,7 +79,11 @@ async function loadStorage(){
   try{
     const remote = await apiRequest('load');
     if(remote && remote.ok && remote.data){
+      const localUsers = (DB && DB.users) || [];
       DB = remote.data;
+      /* /load only sends the customer directory to administrators. Keep this
+         browser's own local accounts so offline/fallback sign-in still works. */
+      if(!Array.isArray(DB.users) || !DB.users.length) DB.users = localUsers;
     }
   }catch(e){
     console.warn('MySQL API unavailable; using browser fallback.', e);
@@ -92,6 +96,35 @@ async function loadStorage(){
     const s = localStorage.getItem('noframe-session');
     if(s) SESSION = JSON.parse(s);
   }catch(e){}
+  /* CART PRIVACY: the bag and wishlist are reloaded from the key that belongs
+     to whoever is actually signed in, so one customer's items can never show
+     up in another customer's session. */
+  const uid = SESSION.user && SESSION.user.id;
+  SESSION.cart     = restoreBag('cart', uid, SESSION.cart);
+  SESSION.wishlist = restoreBag('wishlist', uid, SESSION.wishlist);
+}
+
+/* Per-user bag storage — keyed by account id (or "guest"). */
+function bagKey(kind, userId){ return 'noframe-' + kind + '-' + (userId || 'guest'); }
+function readBag(kind, userId){
+  try{
+    const raw = localStorage.getItem(bagKey(kind, userId));
+    return raw ? (JSON.parse(raw) || []) : [];
+  }catch(e){ return []; }
+}
+function writeBag(kind, userId, list){
+  try{ localStorage.setItem(bagKey(kind, userId), JSON.stringify(list || [])); }
+  catch(e){ console.warn(e); }
+}
+function restoreBag(kind, userId, sessionList){
+  const raw = localStorage.getItem(bagKey(kind, userId));
+  if(raw !== null){
+    try{ return JSON.parse(raw) || []; }catch(e){ return []; }
+  }
+  /* First visit since the per-user keys were introduced — seed from session. */
+  const legacy = sessionList || [];
+  if(legacy.length) writeBag(kind, userId, legacy);
+  return legacy;
 }
 
 /* Gift Cards live in data/catalog.js; merge them into a DB restored from a
@@ -122,6 +155,10 @@ function ensureGiftCards(){
    visitors whose DB was restored from a cached copy. Categories are merged by
    id; catalog items that declare an explicit id (new underwear + brand lines)
    are merged the same way, so nothing is ever duplicated. */
+const CATEGORY_RENAMES = {
+  'mens-underwear':  "Men's Innerwear",
+  'womens-underwear': "Women's Innerwear"
+};
 function ensureCatalogDelta(){
   let changed = false;
   STORE_CATEGORIES.forEach(cat=>{
@@ -149,6 +186,45 @@ function ensureCatalogDelta(){
       });
       changed = true;
     });
+  });
+  /* Category wording renames must reach cached browser copies and MySQL rows
+     too, so apply them to both the category list and every product's
+     categoryName on each start-up (idempotent). */
+  DB.categories.forEach(c=>{
+    const to = CATEGORY_RENAMES[c.id];
+    if(to && c.name !== to){ c.name = to; changed = true; }
+  });
+  DB.products.forEach(p=>{
+    const to = CATEGORY_RENAMES[p.category];
+    if(to && p.categoryName !== to){ p.categoryName = to; changed = true; }
+  });
+  if(changed){
+    try{ localStorage.setItem('noframe-db-fallback', JSON.stringify(DB)); }catch(e){ console.warn(e); }
+  }
+}
+
+/* The seeded administrators (database/noframe.sql) must be able to sign in
+   even when the PHP/MySQL API is unavailable — exactly like the demo customer
+   already can. When MySQL is up, its bcrypt row is authoritative: the API
+   login runs first and this mirror is only the offline fallback. */
+const SEED_ADMINS = [
+  {id:'ADMIN2', name:'Admin', email:'admin@store.com', password:'Admin@123', role:'admin', promo:true,
+   phone:'+94 76 072 4876', address:'18, Kahagala, Kamburupitiya',
+   shippingAddress:'18, Kahagala, Kamburupitiya', billingAddress:'18, Kahagala, Kamburupitiya'},
+  {id:'ADMIN1', name:'NoFrame Admin', email:'admin@noframe.com', password:'admin123', role:'admin', promo:true,
+   phone:'+94 11 234 5678', address:'Headquarters, Colombo 03',
+   shippingAddress:'Headquarters, Colombo 03', billingAddress:'Headquarters, Colombo 03'}
+];
+function ensureSeedAdmins(){
+  if(!Array.isArray(DB.users)) DB.users = [];
+  let changed = false;
+  SEED_ADMINS.forEach(a=>{
+    const exists = DB.users.some(u =>
+      String(u.email||'').toLowerCase() === a.email || u.id === a.id);
+    if(!exists){
+      DB.users.push(Object.assign({}, a));
+      changed = true;
+    }
   });
   if(changed){
     try{ localStorage.setItem('noframe-db-fallback', JSON.stringify(DB)); }catch(e){ console.warn(e); }
@@ -186,12 +262,40 @@ async function saveDB(){
     });
     if(!remote.ok) throw new Error(remote.message||'Save failed');
   }catch(e){
-    console.error('Database save failed:', e);
+    /* /save is an admin-only endpoint (server-side RBAC). A 403 for a normal
+       customer is expected — their state is already safe in localStorage. */
+    if(String(e.message).includes('API 403')){
+      console.info('Save skipped: admin-only endpoint — kept the browser copy.');
+    } else {
+      console.error('Database save failed:', e);
+    }
+  }
+}
+
+/* Orders are written straight to MySQL through their own endpoint, so a
+   customer's order persists without needing admin rights on /save. */
+async function persistOrder(order){
+  try{
+    const remote = await apiRequest('create_order', {
+      method:'POST',
+      body:JSON.stringify(order)
+    });
+    if(remote && remote.ok) return true;
+    throw new Error(remote && remote.message || 'Order not saved');
+  }catch(e){
+    console.warn('Order API unavailable — order kept in the browser copy.', e);
+    return false;
   }
 }
 
 async function saveSession(){
-  try{ localStorage.setItem('noframe-session', JSON.stringify(SESSION)); }
+  try{
+    localStorage.setItem('noframe-session', JSON.stringify(SESSION));
+    /* Keep each account's own bag on its own key (strict per-user isolation). */
+    const uid = SESSION.user && SESSION.user.id;
+    writeBag('cart', uid, SESSION.cart);
+    writeBag('wishlist', uid, SESSION.wishlist);
+  }
   catch(e){console.error(e);}
 }
 
@@ -262,8 +366,9 @@ const LOYALTY = { rate:0.01, pointValue:10, codMinOrders:3 };
 
 function completedPurchases(){
   if(!SESSION.user) return 0;
+  /* Only this account's own orders count — other customers' orders never do. */
   return DB.orders.filter(o=>
-    (o.userId===SESSION.user.id || o.userId==='guest') &&
+    o.userId===SESSION.user.id &&
     !['Cancelled','Refunded','Failed'].includes(o.status)
   ).length;
 }
@@ -351,7 +456,8 @@ function drawerCatLink(id){
 }
 
 function megaMenuHTML(){
-  return Object.entries(MEGA_PANELS).map(([key,cfg])=>{
+  /* Children's has no sub-category dropdown — that panel is never rendered. */
+  return Object.entries(MEGA_PANELS).filter(([key])=>key!=='children').map(([key,cfg])=>{
     const first = catById(cfg.cols[0].ids[0]);
     const promoImg = (first && first.coverImage) || '../images/children/01.jpg';
     return `
@@ -401,7 +507,7 @@ function renderHeader(){
     <nav class="header-nav" onmouseleave="closeMega()">
       <a href="#/category/mens-shirts" class="has-mega" onmouseenter="openMega('men')">Men<span class="nav-caret">▾</span></a>
       <a href="#/category/frocks-women" class="has-mega" onmouseenter="openMega('women')">Women<span class="nav-caret">▾</span></a>
-      <a href="#/category/children" class="has-mega" onmouseenter="openMega('children')">Children<span class="nav-caret">▾</span></a>
+      <a href="#/category/children">Children</a>
       <a href="#/others" class="has-mega" onmouseenter="openMega('other')">Others<span class="nav-caret">▾</span></a>
       <a href="#/category/gift-cards">Gift Cards</a>
       <a href="#/new">New Arrivals</a>
@@ -461,6 +567,9 @@ function renderHeader(){
     <a href="${SESSION.user?'#/profile':'#/login'}" onclick="toggleDrawer(false)">${SESSION.user?'My Account':'Login / Register'}</a>
   `;
   renderCartDrawer();
+  /* The footer carries the role-gated Admin Portal link, so rebuild it
+     whenever the header (and therefore the session) changes. */
+  renderFooter();
 }
 
 function toggleDrawer(open){ $('#mobile-drawer').classList.toggle('open',open); }
@@ -583,10 +692,10 @@ function renderFooter(){
       </div>
       <div>
         <h5>Store Info</h5>
-        <p>📍 Flagship Store: Colombo 03, Sri Lanka</p>
-        <p>📞 Phone: +94 (11) 234-5678</p>
-        <p>✉ Email: support@noframe.lk</p>
-        <a href="#/admin" style="margin-top:10px;font-weight:700;color:var(--accent);">Admin Portal →</a>
+        <p>📍 Address: 18, Kahagala, Kamburupitiya</p>
+        <p>📞 Phone: +94760724876</p>
+        <p>✉ Email: kavishanpasindu2004@gmail.com</p>
+        ${(SESSION.user && SESSION.user.role === 'admin') ? `<a href="#/admin" style="margin-top:10px;font-weight:700;color:var(--accent);">Admin Portal →</a>` : ''}
       </div>
       <div>
         <h5>Newsletter</h5>
@@ -876,10 +985,10 @@ function ringRadius(n, cardW){
 
 /* HTML template for the whole section */
 function ringCarouselHTML(){
-  /* Every sub-category gets a ring card (incl. the newer underwear lines),
-     plus an "Others" card that opens the caps/accessories catch-all listing. */
-  const othersCover = (catById('caps-unisex')||{}).coverImage || IMAGE_SETS.caps[0];
-  const cats = DB.categories.concat([{id:'others', name:'Others — Caps & Accessories', coverImage:othersCover, isOthers:true}]);
+  /* Every sub-category gets a ring card. The extra "Others — Caps &
+     Accessories" card was removed from this Explore section on request —
+     the Others listing stays reachable from the header menu and footer. */
+  const cats = DB.categories.slice();
   RING.cards = cats;
   RING.count = cats.length;
   RING.angle = 0;
@@ -1233,10 +1342,24 @@ function brandBarHTML(){
   </section>`;
 }
 
+/* New Arrivals feed — always exactly `limit` cards, with the men's & women's
+   innerwear lines taking the front slots before any other new arrivals. */
+const INNERWEAR_CATS = ['mens-underwear','womens-underwear'];
+function newArrivalsFeed(limit=8){
+  const isIn  = p => INNERWEAR_CATS.includes(p.category);
+  const isNew = p => Array.isArray(p.tags) && p.tags.includes('new');
+  const ordered = [
+    ...DB.products.filter(p=> isIn(p) &&  isNew(p)),
+    ...DB.products.filter(p=> isIn(p) && !isNew(p)),
+    ...DB.products.filter(p=>!isIn(p) &&  isNew(p)),
+    ...DB.products.filter(p=>!isIn(p) && !isNew(p))
+  ];
+  return ordered.slice(0, limit);
+}
+
 function renderHome(){
   const bestsellers = DB.products.filter(p=>p.tags.includes('bestseller')).slice(0,8);
-  const arrivals = DB.products.filter(p=>p.tags.includes('new')).slice(0,8);
-
+  const arrivals = newArrivalsFeed(8);
   const html = `
   ${heroSliderHTML()}
   ${featuresStripHTML()}
@@ -1829,6 +1952,7 @@ async function placeCodOrder(){
     createdAt: Date.now()
   };
   DB.orders.unshift(order);
+  await persistOrder(order);
   await saveDB();
   await awardLoyalty(order);
   SESSION.cart = [];
@@ -1857,6 +1981,7 @@ async function startPayHerePayment(){
   };
 
   DB.orders.unshift(order);
+  await persistOrder(order);
   await saveDB();
   await awardLoyalty(order);
 
@@ -2016,6 +2141,11 @@ function renderAuth(mode) {
         <button class="btn btn-primary btn-full" style="margin-top:20px;" onclick="doLogin()">Login to Account</button>
         <p class="helper-text">Demo account pre-filled — click Login to test credential verification & session state.</p>
       ` : `
+        <button type="button" class="google-btn" id="google-signup-btn" onclick="googleSignUp()">
+          <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.7-6.7C35.6 2.6 30.2 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.8 6.1C12.3 13.2 17.6 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.6c0-1.6-.1-2.8-.4-4.1H24v8.1h12.4c-.3 2.1-1.6 5.2-4.7 7.3l7.6 5.9c4.5-4.2 6.8-10.3 6.8-17.2z"/><path fill="#FBBC05" d="M10.4 28.7c-.5-1.5-.8-3.1-.8-4.7s.3-3.2.8-4.7l-7.8-6.1C1 16.4 0 20.1 0 24s1 7.6 2.6 10.8l7.8-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.6-5.9c-2 1.4-4.7 2.4-8.3 2.4-6.4 0-11.7-3.7-13.6-9.9l-7.8 6.1C6.5 42.6 14.6 48 24 48z"/></svg>
+          <span>Sign up with Google</span>
+        </button>
+        <div class="auth-divider"><span>or create an account with email</span></div>
         <div class="form-row"><label>Full Name</label><input id="au-name" placeholder="Dev Student"></div>
         <div class="form-row"><label>Email Address</label><input id="au-email" type="email" placeholder="user_882@devlab.io"></div>
         <div class="form-row"><label>Mobile Number</label><input id="au-phone" placeholder="+94 77 123 4567"></div>
@@ -2039,6 +2169,8 @@ function renderAuth(mode) {
       </div>
     </div>
   </div>`;
+
+  if (mode === 'signup') mountGoogleButton();
 }
 
 /* The lamp scene: dark until the visitor pushes the lamp (or touches the
@@ -2070,6 +2202,142 @@ function pickLampColor(btn){
   litLamp(true);
 }
 
+/* ---------------- SIGN-UP: DISCOUNT PIN + THANK-YOU SCREEN ---------------- */
+/* First-time customers get a one-off discount PIN, generated the moment the
+   account is created and shown on the thank-you screen + their profile. */
+function makeDiscountPin(){
+  const alpha = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const seg = n => {
+    const bytes = new Uint8Array(n);
+    (window.crypto || window.msCrypto).getRandomValues(bytes);
+    return Array.from(bytes, b => alpha[b % alpha.length]).join('');
+  };
+  return 'NF-' + seg(4) + '-' + seg(4);
+}
+function rememberDiscountPin(email, pin){
+  if(!email || !pin) return;
+  try{
+    const map = JSON.parse(localStorage.getItem('noframe-discount-pins') || '{}');
+    map[email] = pin;
+    localStorage.setItem('noframe-discount-pins', JSON.stringify(map));
+  }catch(e){ console.warn(e); }
+}
+function discountPinFor(user){
+  if(!user) return null;
+  if(user.discountPin) return user.discountPin;
+  try{
+    const map = JSON.parse(localStorage.getItem('noframe-discount-pins') || '{}');
+    return map[user.email] || null;
+  }catch(e){ return null; }
+}
+function copyDiscountPin(){
+  const el = document.getElementById('ss-pin');
+  const pin = el ? el.textContent.trim() : '';
+  if(!pin) return;
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(pin).then(()=>toast('Discount PIN copied ✓')).catch(()=>toast(pin));
+  } else toast(pin);
+}
+function showSignupSuccess(name, pin, nextHash, nextLabel){
+  rememberDiscountPin(SIGNUP_EMAIL_CACHE || '', pin);
+  $('#app').innerHTML = `
+  <div class="page wrap auth-page">
+    <div class="signup-success" role="status">
+      <div class="ss-check">✓</div>
+      <div class="eyebrow">Welcome to NoFrame</div>
+      <h1>Thank You, ${String(name||'').split(' ')[0] || 'friend'}!</h1>
+      <p class="ss-copy">Your account has been created as a <b>Customer</b> account and your first-order discount is ready to use.</p>
+      <div class="ss-pin-card">
+        <span class="ss-pin-label">YOUR FIRST-ORDER DISCOUNT PIN</span>
+        <b class="ss-pin" id="ss-pin">${pin}</b>
+        <span class="ss-pin-note">Quote this PIN at checkout on your first order to claim your first-time customer discount. It is also saved on your profile page.</span>
+        <button type="button" class="btn btn-outline btn-sm" onclick="copyDiscountPin()">Copy PIN</button>
+      </div>
+      <button type="button" class="btn btn-primary btn-full" onclick="nav('${nextHash || '#/login'}')">${nextLabel || 'Continue to Login'}</button>
+    </div>
+  </div>`;
+  window.scrollTo(0,0);
+}
+let SIGNUP_EMAIL_CACHE = '';
+
+/* ---------------- GOOGLE SIGN-UP (Google Identity Services) ----------------
+   To switch Google sign-up on, create an OAuth 2.0 *Web application* client ID
+   in Google Cloud Console and paste it in BOTH places:
+     1. GOOGLE_CLIENT_ID below  (js/app.js  — public, safe to ship)
+     2. $GOOGLE_CLIENT_ID in api/config.php (server verifies the ID token)
+   Until then the button says what is missing and email sign-up works. */
+const GOOGLE_CLIENT_ID = '';
+
+function mountGoogleButton(){
+  const host = document.getElementById('google-signup-btn');
+  if(!host || !GOOGLE_CLIENT_ID) return;          /* keep the static fallback button */
+  if(window.__gisReady){ renderGoogleButton(host); return; }
+  if(window.__gisLoading) return;
+  window.__gisLoading = true;
+  const s = document.createElement('script');
+  s.src = 'https://accounts.google.com/gsi/client'; s.async = true; s.defer = true;
+  s.onload = () => {
+    window.__gisLoading = false;
+    try{
+      google.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: r => handleGoogleCredential(r.credential)
+      });
+      window.__gisReady = true;
+      const h = document.getElementById('google-signup-btn');
+      if(h) renderGoogleButton(h);
+    }catch(e){ console.warn('Google Identity Services init failed', e); }
+  };
+  s.onerror = () => { window.__gisLoading = false; console.warn('Google Identity Services failed to load'); };
+  document.head.appendChild(s);
+}
+function renderGoogleButton(host){
+  host.innerHTML = '';
+  host.classList.add('google-host');
+  google.accounts.id.renderButton(host, {theme:'filled_black', size:'large', width:320, text:'signup_with'});
+}
+function googleSignUp(){
+  if(!GOOGLE_CLIENT_ID){
+    toast('Google sign-up needs a Google OAuth Client ID — set GOOGLE_CLIENT_ID in js/app.js and api/config.php. Email sign-up works meanwhile.');
+    return;
+  }
+  if(window.__gisReady) try{ google.accounts.id.prompt(); return; }catch(e){}
+  toast('Google sign-in is still loading — one moment…');
+}
+async function handleGoogleCredential(credential){
+  try{
+    /* Generate this customer's first-order PIN up front so the server can
+       store it on a brand-new Google account. */
+    const newPin = makeDiscountPin();
+    const remote = await apiRequest('google_auth', {
+      method:'POST',
+      body: JSON.stringify({ credential, discount_pin: newPin })
+    });
+    if(remote && remote.ok && remote.user){
+      const pin = discountPinFor(remote.user) || newPin;
+      rememberDiscountPin(remote.user.email, pin);
+      remote.user.discountPin = pin;
+      remote.user.role = remote.user.role || 'customer';
+      SESSION.user = remote.user;
+      mergeGuestCart(readBag('cart', remote.user.id));
+      await saveSession();
+      renderHeader();
+      if(remote.isNew){
+        SIGNUP_EMAIL_CACHE = remote.user.email;
+        showSignupSuccess(remote.user.name, pin, '#/profile', 'Continue to My Account');
+      } else {
+        toast('Welcome back, ' + remote.user.name + ' ✓');
+        nav('#/profile');
+      }
+      return;
+    }
+    if(remote && remote.message) toast(remote.message);
+  }catch(e){
+    console.warn('Google auth needs the PHP API (api/api.php) running', e);
+    toast('Google sign-in needs the XAMPP API running — or sign up with email below.');
+  }
+}
+
 async function doLogin() {
   const email = $('#au-email').value.trim();
   const pass = $('#au-pass').value;
@@ -2092,7 +2360,10 @@ async function doLogin() {
     });
 
     if (remote && remote.ok && remote.user) {
-      mergeGuestCart(remote.user.cart || []);
+      remote.user.role = remote.user.role || 'customer';
+      remote.user.discountPin = discountPinFor(remote.user);
+      /* Only this account's own saved bag is restored — never another user's. */
+      mergeGuestCart(remote.user.cart || readBag('cart', remote.user.id));
       SESSION.user = remote.user;
       await saveSession();
       toast('Welcome back, ' + remote.user.name + ' ✓');
@@ -2127,10 +2398,11 @@ async function doLogin() {
     avatar: u.avatar || '../assets/u1.svg',
     accountStatus: u.accountStatus || 'Active Member',
     createdAt: u.createdAt || '2026-01-15',
-    role: u.role || 'customer'
+    role: u.role || 'customer',
+    discountPin: u.discountPin || discountPinFor(u) || null
   };
 
-  mergeGuestCart([]);
+  mergeGuestCart(readBag('cart', u.id));
   SESSION.user = userObj;
   await saveSession();
   toast('Welcome back, ' + userObj.name + ' ✓');
@@ -2167,14 +2439,19 @@ async function doSignup() {
     return;
   }
 
+  /* First-time customers always land as role "customer" and receive a
+     first-order discount PIN shown on the thank-you screen. */
+  const pin = makeDiscountPin();
+  SIGNUP_EMAIL_CACHE = email;
+  rememberDiscountPin(email, pin);
+
   try {
     const remote = await apiRequest('register', {
       method: 'POST',
-      body: JSON.stringify({ name, email, phone, password: pass, confirm_password: confirmPass })
+      body: JSON.stringify({ name, email, phone, password: pass, confirm_password: confirmPass, role: 'customer', discount_pin: pin })
     });
     if (remote && remote.ok) {
-      toast('Registration successful! Please log in to your account ✓');
-      nav('#/login');
+      showSignupSuccess(name, pin, '#/login', 'Continue to Login');
       return;
     } else if (remote && remote.message) {
       toast(remote.message);
@@ -2191,19 +2468,24 @@ async function doSignup() {
 
   const newId = 'U' + Date.now();
   const newUser = {
-    id: newId, name, email, phone, password: pass, address: '', role: 'customer', promo: true
+    id: newId, name, email, phone, password: pass, address: '', role: 'customer', promo: true,
+    discountPin: pin
   };
   DB.users.push(newUser);
   await saveDB();
-  toast('Registration successful! Redirecting to login… ✓');
-  nav('#/login');
+  rememberDiscountPin(email, pin);
+  showSignupSuccess(name, pin, '#/login', 'Continue to Login');
 }
 
 async function doLogout() {
   try {
     await apiRequest('logout', { method: 'POST' });
   } catch (e) {}
+  /* Strict isolation: the signed-in bag stays under their own key and the
+     next visitor on this browser starts from an empty guest bag. */
   SESSION.user = null;
+  SESSION.cart = [];
+  SESSION.wishlist = [];
   await saveSession();
   renderHeader();
   toast('Logged out successfully');
@@ -2218,13 +2500,17 @@ function renderProfile(tab) {
     return;
   }
   const u = SESSION.user;
-  const myOrders = DB.orders.filter(o => o.userId === u.id || o.userId === 'guest');
+  /* ORDER HISTORY: strictly this customer's own orders — guest/other-account
+     orders are never mixed into a profile. */
+  const myOrders = DB.orders.filter(o => o.userId === u.id);
+  const myPin = discountPinFor(u);
   let body = '';
 
   if (tab === 'orders') {
     body = myOrders.length ? myOrders.map(o => `
       <div class="order-row">
-        <div><b class="mono">#${o.id}</b><div style="font-size:12px;color:var(--ink-soft);">${new Date(o.createdAt).toLocaleDateString()} · ${o.items.length} item(s)</div></div>
+        <div><b class="mono">#${o.id}</b><div style="font-size:12px;color:var(--ink-soft);">${new Date(o.createdAt).toLocaleDateString()} · ${o.items.length} item(s)</div>
+        <div style="font-size:12px;color:var(--ink-soft);margin-top:3px;">${o.items.map(i=>`${i.title} × ${i.qty}`).join(', ')}</div></div>
         <span class="status-chip status-${o.status}">${o.status}</span>
         <span class="mono" style="font-weight:700;">${money(o.total)}</span>
       </div>`).join('') : `<p style="color:var(--ink-soft);">No orders yet. <a href="#/home" class="btn-ghost">Start shopping →</a></p>`;
@@ -2276,6 +2562,7 @@ function renderProfile(tab) {
         <div class="form-row"><label>Email Address</label><input value="${u.email}" disabled style="background:var(--surface-alt);"></div>
         <div class="form-row"><label>Mobile Phone Number</label><input id="pf-phone" value="${u.phone || ''}"></div>
         <div class="form-row"><label>Account Role</label><input value="${u.role || 'customer'}" disabled style="background:var(--surface-alt);"></div>
+        <div class="form-row"><label>First-Order Discount PIN</label><input value="${myPin || 'Not issued'}" disabled style="background:var(--surface-alt);font-family:'Space Mono',monospace;letter-spacing:.1em;"></div>
       </div>
     </div>
     
@@ -2397,7 +2684,7 @@ async function changePassword() {
 /* ---------------- SUPPORT PAGES ---------------- */
 const STATIC_PAGES = {
   about:{title:'About NoFrame', body:'Founded in Sri Lanka, NoFrame represents modern luxury fashion built without boundaries. We believe clothing should articulate individuality through clean silhouettes, premium fabrics, and ethical craftsmanship.'},
-  contact:{title:'Customer Support', body:'Reach our customer care team at support@noframe.lk or call +94 (11) 234-5678, Monday–Saturday 9am–6pm IST.'},
+  contact:{title:'Customer Support', body:'Reach our customer care team at kavishanpasindu2004@gmail.com or call +94760724876, Monday–Saturday 9am–6pm IST. Visit us at 18, Kahagala, Kamburupitiya.'},
   shipping:{title:'Shipping & Delivery Policy', body:'We deliver islandwide across Sri Lanka. Orders over Rs. 5,000 qualify for FREE Express Shipping (2–3 business days). Standard shipping is flat-rate Rs. 1,500.'},
   returns:{title:'Returns & Exchange Policy', body:'We accept returns and size exchanges within 30 days of delivery provided items are unworn with original tags attached.'},
   privacy:{title:'Privacy Policy', body:'Your personal data is encrypted and strictly used to fulfill orders and improve your shopping experience.'},
@@ -2412,12 +2699,19 @@ function renderStatic(key){
 /* ---------------- ADMIN DASHBOARD ---------------- */
 function adminNavItem(id,label){ return `<a class="${VIEW.adminTab===id?'active':''}" href="#/admin/${id}">${label}</a>`; }
 function renderAdmin(tab){
+  /* Server-side this is enforced by api.php (admin JWT required for /save);
+     the router already bounces non-admins — this is the last line of defence. */
+  if(!SESSION.user || (SESSION.user.role || 'customer') !== 'admin'){
+    $('#app').innerHTML = `<div class="page wrap"><div class="access-denied"><span>⛔</span><h1>Access Denied</h1><p>You need an administrator account to open the admin dashboard.</p><a class="btn btn-primary" href="#/home">Back to Home</a></div></div>`;
+    return;
+  }
   VIEW.adminTab = tab||'overview';
   let body='';
   if(VIEW.adminTab==='overview') body = adminOverview();
   else if(VIEW.adminTab==='products') body = adminProducts();
   else if(VIEW.adminTab==='categories') body = adminCategories();
   else if(VIEW.adminTab==='orders') body = adminOrders();
+  else if(VIEW.adminTab==='customers') body = adminCustomers();
 
   $('#app').innerHTML = `
   <div class="admin-shell">
@@ -2427,6 +2721,7 @@ function renderAdmin(tab){
       ${adminNavItem('products','Products')}
       ${adminNavItem('categories','Categories')}
       ${adminNavItem('orders','Orders')}
+      ${adminNavItem('customers','Customers')}
       <a href="#/home" style="margin-top:24px;border-top:1px solid rgba(255,255,255,0.15);padding-top:14px;">← Back to Storefront</a>
     </div>
     <div class="admin-main">${body}</div>
@@ -2549,6 +2844,29 @@ function adminOrders(){
 
 async function updateOrderStatus(id,status){
   const o = DB.orders.find(x=>x.id===id); if(o) o.status=status; await saveDB(); toast('Order status updated ✓');
+}
+
+/* Admin-only customer directory — a completely separate view from the
+   customer profile: every account, its order count and lifetime spend. */
+function adminCustomers(){
+  const rows = DB.users.map(u=>{
+    const orders = DB.orders.filter(o=>o.userId===u.id);
+    const spend = orders.reduce((s,o)=>s+Number(o.total||0),0);
+    return `<tr>
+      <td><b>${u.name}</b></td>
+      <td>${u.email}</td>
+      <td><span class="role-badge ${u.role==='admin'?'is-admin':''}">${u.role||'customer'}</span></td>
+      <td>${orders.length}</td>
+      <td class="mono">${money(spend)}</td>
+      <td>${u.createdAt ? new Date(u.createdAt).toLocaleDateString() : '—'}</td>
+    </tr>`;
+  }).join('');
+  return `
+  <div class="admin-topbar"><h2 class="serif" style="font-size:28px;">Customer Directory</h2></div>
+  <div class="admin-panel" style="padding:0;">
+    <table class="admin-table"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Orders</th><th>Lifetime Spend</th><th>Joined</th></tr></thead>
+    <tbody>${rows || `<tr><td colspan="6">No customer accounts yet.</td></tr>`}</tbody></table>
+  </div>`;
 }
 
 /* ============================================================
@@ -2767,11 +3085,20 @@ function renderRoute(){
   window.scrollTo(0,0);
 
   // ROUTE PROTECTION GUARDS (Milestone 3)
-  const protectedRoutes = ['profile', 'account', 'checkout'];
+  const protectedRoutes = ['profile', 'account', 'checkout', 'admin'];
   if (protectedRoutes.includes(route) && !SESSION.user) {
     const returnUrl = encodeURIComponent(hash);
     toast('Please login to access protected area');
     location.hash = '#/login?returnUrl=' + returnUrl;
+    return;
+  }
+
+  // ROLE-BASED ACCESS CONTROL — /admin is for administrators only.
+  // The footer link is hidden for customers (renderFooter), and a customer
+  // who reaches the URL directly is sent back to the home page.
+  if (route === 'admin' && (SESSION.user.role || 'customer') !== 'admin') {
+    toast('Access denied — administrator accounts only');
+    location.hash = '#/home';
     return;
   }
 
@@ -2916,6 +3243,7 @@ function initSantaFloat(){
   await loadStorage();
   ensureGiftCards();
   ensureCatalogDelta();
+  ensureSeedAdmins();
   enforceSaleQuota();
   renderFooter();
   renderRoute();

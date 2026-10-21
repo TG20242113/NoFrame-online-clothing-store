@@ -19,8 +19,8 @@ const STORE_CATEGORIES = [
   {id:'womens-shoes',name:"Women's Heels & Footwear",coverImage:'https://images.unsplash.com/photo-1543163521-1bf539c55dd2?auto=format&fit=crop&w=900&q=85'},
   {id:'womens-trousers',name:"Women's Pants & Denim",coverImage:'https://images.unsplash.com/photo-1541099649105-f69ad21f3246?auto=format&fit=crop&w=900&q=85'},
   {id:'children',name:"Children's Fashion",coverImage:'../images/children/01.jpg'},
-  {id:'womens-underwear',name:"Women's Underwear",coverImage:'https://images.unsplash.com/photo-1571945153237-4929e783af4a?auto=format&fit=crop&w=900&q=85'},
-  {id:'mens-underwear',name:"Men's Underwear",coverImage:'https://images.unsplash.com/photo-1618354691373-d851c5c3a990?auto=format&fit=crop&w=900&q=85'},
+  {id:'womens-underwear',name:"Women's Innerwear",coverImage:'https://images.unsplash.com/photo-1571945153237-4929e783af4a?auto=format&fit=crop&w=900&q=85'},
+  {id:'mens-underwear',name:"Men's Innerwear",coverImage:'https://images.unsplash.com/photo-1618354691373-d851c5c3a990?auto=format&fit=crop&w=900&q=85'},
   {id:'gift-cards',name:'Gift Cards',coverImage:'../assets/gift-card.svg'},
 ];
 

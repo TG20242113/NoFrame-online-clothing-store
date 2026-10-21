@@ -59,6 +59,45 @@ The demo customer is:
 - Email: `demo@noframe.com`
 - Password: `demo123`
 
+Seeded for Phase 3 (Testing & Deployment) — the Admin Dashboard account:
+
+- Name: Admin
+- Email: `admin@store.com`
+- Password: `Admin@123` (stored as a bcrypt hash in `database/noframe.sql`)
+- Role: `admin`
+
+## Admin access control (RBAC)
+
+- The **Admin Portal** footer link only renders for accounts whose `role` is `admin`.
+- `#/admin` is also guarded in the router: a signed-in customer who opens the URL
+  directly is sent back to the home page ("Access denied").
+- Hiding the link is not the protection. `api/api.php` enforces it server-side:
+  `?action=save` requires an admin JWT (403 otherwise), and `?action=load`
+  returns the customer directory and the **full** order book only to admins.
+  A signed-in customer receives only their own orders; guests receive none.
+- Orders are written through `?action=create_order`, which always stores the
+  order under the authenticated account (or as a guest order) — the client
+  cannot attach an order to somebody else's account.
+
+## First-order discount PIN
+
+Every first-time sign-up (email **or** Google) gets a PIN such as
+`NF-PQ9D-UTUA`, shown on the thank-you screen and stored on the customer's
+profile page (and in the `users.discount_pin` column when that column exists).
+
+## Google sign-up
+
+Google sign-up is wired up but disabled until you add an OAuth client ID:
+
+1. Google Cloud Console → Credentials → OAuth 2.0 Client ID → **Web application**
+2. Add your origin (e.g. `http://localhost/`) to *Authorised JavaScript origins*
+3. Paste the client ID in **both** `js/app.js` (`GOOGLE_CLIENT_ID`) and
+   `api/config.php` (`GOOGLE_CLIENT_ID`)
+
+The server verifies the ID token against Google's `tokeninfo` endpoint
+(signature, issuer, audience, expiry) before creating or opening an account;
+new Google accounts are created with role `customer`.
+
 ## LKR currency
 
 Product prices are stored as LKR. The website formats prices as:
