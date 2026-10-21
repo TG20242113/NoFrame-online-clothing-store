@@ -1,0 +1,6 @@
+
+Admin 	admin@store.com	Admin@123
+
+
+////////////////////////////
+NoFrame Admin	admin@noframe.com	admin123

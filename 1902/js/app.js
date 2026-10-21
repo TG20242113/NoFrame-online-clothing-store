@@ -262,10 +262,14 @@ async function saveDB(){
     });
     if(!remote.ok) throw new Error(remote.message||'Save failed');
   }catch(e){
-    /* /save is an admin-only endpoint (server-side RBAC). A 403 for a normal
-       customer is expected — their state is already safe in localStorage. */
-    if(String(e.message).includes('API 403')){
+    const msg = String(e.message||e);
+    if(msg.includes('API 403')){
+      /* /save is admin-only (server-side RBAC) — expected for customers. */
       console.info('Save skipped: admin-only endpoint — kept the browser copy.');
+    } else if(/^API (501|502|503|504)$/.test(msg) || /fetch|network|Failed to fetch/i.test(msg)){
+      /* No PHP/API running (static preview, XAMPP stopped): not a data loss —
+         the browser copy above is already written. */
+      console.warn('API unavailable (' + msg + ') — product data is kept in this browser only. Start XAMPP/MySQL to persist it centrally.');
     } else {
       console.error('Database save failed:', e);
     }
@@ -2765,45 +2769,137 @@ function adminProducts(){
   <div id="product-form-slot"></div>`;
 }
 
+/* ---- Admin product form: main category → sub-category, colours, sizes ---- */
+const FORM_SIZE_POOL = ['XS','S','M','L','XL','2XL','XXL','Free Size'];
+const FORM_TAG_POOL = ['new','featured','bestseller','sale','trending'];
+
+function groupOfCategory(catId){
+  return megaGroups().find(g => g.ids.includes(catId)) || null;
+}
+function groupLabel(g){ return g ? g.title.charAt(0) + g.title.slice(1).toLowerCase() : '—'; }
+function dbCat(id){ return DB.categories.find(c => c.id === id) || null; }
+
+/* Repopulate the sub-category dropdown whenever the main category changes. */
+function fillSubcats(groupKey, selectedId){
+  const g = megaGroups().find(x => x.key === groupKey) || {ids:[]};
+  const sel = document.getElementById('pf-cat');
+  if(!sel) return;
+  sel.innerHTML = g.ids.map(cid=>{
+    const c = dbCat(cid);
+    return c ? `<option value="${c.id}" ${selectedId===c.id?'selected':''}>${c.name}</option>` : '';
+  }).join('');
+}
+function pickChips(rootId){
+  return [...document.querySelectorAll('#'+rootId+' [data-pick].selected')].map(b => b.dataset.pick);
+}
+
 function openProductForm(id){
   const p = id?findProduct(id):null;
   VIEW.editingProduct = id||null;
+
+  const groups = megaGroups();
+  const active = (p && groupOfCategory(p.category)) || groups[0];
+
+  const colors = (p && p.colors.length) ? p.colors : ['black','navy','white'];
+  const sizes  = p ? [...new Set([...(p.sizes||[]), ...FORM_SIZE_POOL])] : FORM_SIZE_POOL;
+  const selSizes = (p && p.sizes) ? p.sizes : ['S','M','L','XL','2XL'];
+  const tags   = p ? (p.tags||[]) : ['new'];
+
   const html = `
   <div class="admin-panel">
     <h3>${p?'Edit Product':'Add New Product'}</h3>
     <div class="form-2col">
-      <div class="form-row"><label>Title</label><input id="pf-title" value="${p?p.title:''}"></div>
-      <div class="form-row"><label>Category</label><select id="pf-cat">${DB.categories.map(c=>`<option value="${c.id}" ${p&&p.category===c.id?'selected':''}>${c.name}</option>`).join('')}</select></div>
+      <div class="form-row" style="grid-column:1/-1;"><label>Title</label><input id="pf-title" value="${p?p.title:''}" placeholder="e.g. Oxford Cotton Button-Down Shirt"></div>
+
+      <div class="form-row"><label>Main Category</label>
+        <select id="pf-group" onchange="fillSubcats(this.value)">
+          ${groups.map(g=>`<option value="${g.key}" ${g.key===active.key?'selected':''}>${groupLabel(g)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-row"><label>Sub-Category</label><select id="pf-cat"></select></div>
+
       <div class="form-row"><label>Regular Price (Rs.)</label><input id="pf-price" type="number" value="${p?p.price:''}"></div>
       <div class="form-row"><label>Discount Sale Price (Rs.)</label><input id="pf-dprice" type="number" value="${p&&p.discountPrice?p.discountPrice:''}"></div>
       <div class="form-row"><label>Stock Quantity</label><input id="pf-stock" type="number" value="${p?p.stock:20}"></div>
-      <div class="form-row"><label>Image URL</label><input id="pf-image" value="${p?p.images[0]:''}"></div>
+      <div class="form-row"><label>Image URL</label><input id="pf-image" value="${p?p.images[0]:''}" placeholder="../images/… or https://…"></div>
+
+      <div class="form-row" style="grid-column:1/-1;"><label>Colours</label>
+        <div class="pick-row" id="pf-colors">
+          ${Object.keys(COLORS).map(c=>`<button type="button" class="swatch-btn ${colors.includes(c)?'selected':''}" data-pick="${c}" title="${c}" style="background:${COLORS[c]}" onclick="this.classList.toggle('selected')"></button>`).join('')}
+        </div>
+        <span class="pick-note">Click a swatch to include or exclude it — these become the colour dots shoppers see.</span>
+      </div>
+
+      <div class="form-row" style="grid-column:1/-1;"><label>Sizes</label>
+        <div class="pick-row" id="pf-sizes">
+          ${sizes.map(s=>`<button type="button" class="size-btn ${selSizes.includes(s)?'selected':''}" data-pick="${s}" onclick="this.classList.toggle('selected')">${s}</button>`).join('')}
+        </div>
+        <span class="pick-note">Selected sizes appear on the product page and in the size filter.</span>
+      </div>
+
+      <div class="form-row" style="grid-column:1/-1;"><label>Tags</label>
+        <div class="pick-row" id="pf-tags">
+          ${FORM_TAG_POOL.map(t=>`<button type="button" class="tag-chip ${tags.includes(t)?'selected':''}" data-pick="${t}" onclick="this.classList.toggle('selected')">${t}</button>`).join('')}
+        </div>
+        <span class="pick-note">"new" feeds New Arrivals, "bestseller" feeds Best Sellers, "sale" feeds the sale carousel.</span>
+      </div>
+
+      <div class="form-row" style="grid-column:1/-1;"><label>Description</label>
+        <textarea id="pf-desc" rows="3" placeholder="Fabric, fit and finish…">${p?(p.description||''):''}</textarea>
+      </div>
     </div>
     <div style="display:flex;gap:10px;">
       <button class="btn btn-primary" onclick="saveProduct()">Save Product</button>
       <button class="btn btn-outline" onclick="$('#product-form-slot').innerHTML=''">Cancel</button>
     </div>
   </div>`;
+
   $('#product-form-slot').innerHTML = html;
+  fillSubcats(active.key, p ? p.category : null);
   $('#product-form-slot').scrollIntoView({behavior:'smooth'});
 }
 
 async function saveProduct(){
-  const cat = DB.categories.find(c=>c.id===$('#pf-cat').value);
+  const groupSel = $('#pf-group');
+  const catId = $('#pf-cat').value;
+  const cat = dbCat(catId);
+  if(!cat){ toast('Choose a sub-category'); return; }
+
+  const colors = pickChips('pf-colors');
+  const sizes  = pickChips('pf-sizes');
+  const tags   = pickChips('pf-tags');
+  const existing = VIEW.editingProduct ? findProduct(VIEW.editingProduct) : null;
+
+  const groupKey = groupSel ? groupSel.value : '';
+  const group = megaGroups().find(x => x.key === groupKey) || null;
+
   const data = {
-    title:$('#pf-title').value, category:cat.id, categoryName:cat.name,
-    price:+$('#pf-price').value, discountPrice: $('#pf-dprice').value?+$('#pf-dprice').value:null,
-    stock:+$('#pf-stock').value, images:[$('#pf-image').value||generateProductImage(cat.id,'new')],
-    colors:['black','navy','white'], sizes:['S','M','L','XL','2XL']
+    title:$('#pf-title').value.trim(),
+    category:cat.id, categoryName:cat.name,
+    mainCategory: groupLabel(group),
+    price:+$('#pf-price').value,
+    discountPrice: $('#pf-dprice').value ? +$('#pf-dprice').value : null,
+    stock:+$('#pf-stock').value,
+    images: (existing && existing.images[0] === $('#pf-image').value && existing.images.length)
+      ? existing.images
+      : [$('#pf-image').value || generateProductImage(cat.id, 'new')],
+    colors: colors.length ? colors : ['black','white'],
+    sizes: sizes.length ? sizes : ['Free Size'],
+    tags: tags.length ? tags : ['new'],
+    description: $('#pf-desc').value.trim() || 'A NoFrame signature fashion piece.'
   };
-  if(!data.title||!data.price){ toast('Title and price are required'); return; }
+  if(!data.title || !data.price){ toast('Title and price are required'); return; }
+  if(data.discountPrice !== null && data.discountPrice >= data.price){
+    toast('Sale price must be lower than the regular price'); return;
+  }
+
   if(VIEW.editingProduct){
     const idx = DB.products.findIndex(p=>p.id===VIEW.editingProduct);
     DB.products[idx] = {...DB.products[idx], ...data};
   } else {
     DB.products.unshift({
-      id:'P'+Date.now(), ...data, rating:'4.8', reviewsCount:1, tags:['new'],
-      description:'NoFrame luxury apparel designed with precision craftsmanship.', createdAt:Date.now()
+      id:'P'+Date.now(), ...data, rating:'4.8', reviewsCount:1,
+      createdAt:Date.now()
     });
   }
   await saveDB(); toast('Product saved ✓'); renderAdmin('products');
@@ -2818,9 +2914,13 @@ function adminCategories(){
   return `
   <div class="admin-topbar"><h2 class="serif" style="font-size:28px;">Category Management</h2></div>
   <div class="admin-panel" style="padding:0;">
-    <table class="admin-table"><thead><tr><th>Category Name</th><th>Slug ID</th><th>Products</th></tr></thead>
-    <tbody>${DB.categories.map(c=>`<tr><td><b>${c.name}</b></td><td class="mono">${c.id}</td><td>${DB.products.filter(p=>p.category===c.id).length}</td></tr>`).join('')}</tbody></table>
-  </div>`;
+    <table class="admin-table"><thead><tr><th>Main Category</th><th>Sub-Category</th><th>Slug ID</th><th>Products</th></tr></thead>
+    <tbody>${DB.categories.map(c=>{
+      const g = groupOfCategory(c.id);
+      return `<tr><td><span class="role-badge">${groupLabel(g)}</span></td><td><b>${c.name}</b></td><td class="mono">${c.id}</td><td>${DB.products.filter(p=>p.category===c.id).length}</td></tr>`;
+    }).join('')}</tbody></table>
+  </div>
+  <p style="margin-top:16px;font-size:12.5px;color:var(--ink-soft);">Main category = the top-level menu group (Men / Women / Children / Other). Sub-category = the individual line shown in the Shop by Category ring and the mega menu.</p>`;
 }
 
 function adminOrders(){
