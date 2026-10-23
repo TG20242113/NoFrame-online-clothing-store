@@ -203,6 +203,71 @@ function ensureCatalogDelta(){
   }
 }
 
+/* One refresh per catalogue rebuild: data/catalog.js declares CATALOG_VERSION,
+   and whenever that version changes every catalogue-owned row is rewritten from
+   the file while products the rebuild dropped are removed. This is what makes a
+   browser or MySQL copy holding the old (short) product list catch up. It runs
+   only on a version change, so price and inventory edits made later through the
+   admin panel still stick. Products the admin adds later keep their P+Date.now()
+   ids and are never touched. */
+function applyCatalogVersion(){
+  let stored = null;
+  try{ stored = localStorage.getItem('noframe-catalog-version'); }catch(e){}
+  if(stored === CATALOG_VERSION) return false;
+  const catalogIds = new Set();
+  const catalogByCat = {};
+  Object.keys(STORE_PRODUCTS).forEach(catId=>{
+    (STORE_PRODUCTS[catId]||[]).forEach(it=>{
+      if(!it.id) return;
+      catalogIds.add(it.id);
+      (catalogByCat[catId] = catalogByCat[catId] || []).push(it);
+    });
+  });
+  let changed = false;
+  DB.categories = DB.categories || [];
+  DB.products = DB.products || [];
+  STORE_CATEGORIES.forEach(cat=>{
+    const row = DB.categories.find(c=>c.id===cat.id);
+    if(!row){ DB.categories.push({id:cat.id, name:cat.name, coverImage:cat.coverImage||null}); changed = true; }
+    else if(row.name !== cat.name || row.coverImage !== cat.coverImage){
+      row.name = cat.name; row.coverImage = cat.coverImage || null; changed = true;
+    }
+  });
+  Object.keys(catalogByCat).forEach(catId=>{
+    const cat = STORE_CATEGORIES.find(c=>c.id===catId) || {};
+    catalogByCat[catId].forEach(it=>{
+      const base = {
+        id:it.id, title:it.title, category:catId, categoryName:cat.name||'',
+        price:Number(it.price)||0, discountPrice:it.discountPrice ?? null,
+        colors:it.colors||['black','white'], sizes:it.sizes||['S','M','L','XL'],
+        images:it.images||[], stock:it.stock ?? 20, tags:it.tags||['new'],
+        description:it.description||''
+      };
+      const row = DB.products.find(p=>p.id===it.id);
+      if(!row){
+        DB.products.push(Object.assign({
+          rating:'4.6', reviewsCount:18+(it.title||'').length,
+          createdAt:Date.now()-(hashStr(it.id)%20)*86400000
+        }, base));
+        changed = true;
+      } else {
+        Object.keys(base).forEach(k=>{
+          if(JSON.stringify(row[k]) !== JSON.stringify(base[k])){ row[k] = base[k]; changed = true; }
+        });
+      }
+    });
+  });
+  const before = DB.products.length;
+  DB.products = DB.products.filter(p => catalogIds.has(p.id) || /^P\d{10,}$/.test(p.id));
+  if(DB.products.length !== before) changed = true;
+  try{ localStorage.setItem('noframe-catalog-version', CATALOG_VERSION); }catch(e){ console.warn(e); }
+  if(changed){
+    try{ localStorage.setItem('noframe-db-fallback', JSON.stringify(DB)); }catch(e){ console.warn(e); }
+    if(SESSION.user && SESSION.user.role === 'admin') saveDB();
+  }
+  return changed;
+}
+
 /* The seeded administrators (database/noframe.sql) must be able to sign in
    even when the PHP/MySQL API is unavailable — exactly like the demo customer
    already can. When MySQL is up, its bcrypt row is authoritative: the API
@@ -231,10 +296,10 @@ function ensureSeedAdmins(){
   }
 }
 
-/* Only 3–4 items out of every ~10 in a sub-category stay on sale, so the
-   sale badge keeps its meaning. Enforced at startup against seed data,
-   the cached browser DB and MySQL-loaded DB alike. */
-const SALE_QUOTA = 4;
+/* Sale rule: 1 in every 5 products of a sub-category may carry a discount,
+   so the sale badge keeps its meaning. Enforced at startup against seed
+   data, the cached browser DB and MySQL-loaded DB alike. */
+function saleQuotaFor(total){ return Math.max(1, Math.floor(total/5)); }
 function enforceSaleQuota(){
   let changed = false;
   const byCat = {};
@@ -243,8 +308,10 @@ function enforceSaleQuota(){
     if(!onSale) return;
     (byCat[p.category] = byCat[p.category] || []).push(p);
   });
-  Object.values(byCat).forEach(list=>{
-    list.slice(SALE_QUOTA).forEach(p=>{
+  const totals = {};
+  DB.products.forEach(p=>{ totals[p.category] = (totals[p.category]||0) + 1; });
+  Object.entries(byCat).forEach(([cat, list])=>{
+    list.slice(saleQuotaFor(totals[cat]||0)).forEach(p=>{
       if(p.discountPrice!=null){ p.discountPrice = null; changed = true; }
       if(Array.isArray(p.tags) && p.tags.includes('sale')){ p.tags = p.tags.filter(t=>t!=='sale'); changed = true; }
     });
@@ -533,6 +600,7 @@ function renderHeader(){
         ${cartCount()?`<span class="badge">${cartCount()}</span>`:''}
       </button>
       ${SESSION.user ? `
+        ${(SESSION.user.role||'customer')==='admin' ? `<a class="header-admin-link" href="#/admin" title="Open the admin dashboard">⚙ Admin</a>` : ''}
         <a href="#/profile" class="user-avatar-badge" title="${SESSION.user.name}">
           <img src="${SESSION.user.avatar || '../assets/u1.svg'}" alt="${SESSION.user.name}" onerror="this.src='../assets/u1.svg'">
           <span class="header-user-name" style="max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${SESSION.user.name.split(' ')[0]}</span>
@@ -569,6 +637,7 @@ function renderHeader(){
     <a href="#/sale" onclick="toggleDrawer(false)" style="color:var(--accent);">Special Sale</a>
     <a href="#/cart" onclick="toggleDrawer(false)">Shopping Cart (${cartCount()})</a>
     <a href="${SESSION.user?'#/profile':'#/login'}" onclick="toggleDrawer(false)">${SESSION.user?'My Account':'Login / Register'}</a>
+    ${(SESSION.user && (SESSION.user.role||'customer')==='admin') ? `<a href="#/admin" onclick="toggleDrawer(false)">Admin Dashboard</a>` : ''}
   `;
   renderCartDrawer();
   /* The footer carries the role-gated Admin Portal link, so rebuild it
@@ -1286,27 +1355,16 @@ function productsByTag(tag,limit=8){
   return (tagged.length ? tagged : DB.products).slice(0,limit);
 }
 
-/* Sale carousel feed — one product per sub-category per round, so every
-   visible group of 4 always spans four different sub-categories. */
-function saleCarouselItems(limit=12){
-  const byCat = {};
-  DB.products.filter(p=>p.discountPrice || p.tags.includes('sale')).forEach(p=>{
-    (byCat[p.category] = byCat[p.category] || []).push(p);
-  });
-  const cats = Object.keys(byCat);
-  const out = [];
-  let i = 0;
-  while(out.length < limit && cats.some(c=>byCat[c].length)){
-    const bucket = byCat[cats[i % cats.length]];
-    const item = bucket.shift();
-    if(item) out.push(item);
-    i++;
-  }
-  return out;
+/* Sale carousel feed — exactly `limit` products, one per sub-category, starting
+   near the end of the category order so the sale rail complements the other
+   two rails instead of repeating them. */
+function saleCarouselItems(limit=4){
+  const sale = DB.products.filter(p=>p.discountPrice || p.tags.includes('sale'));
+  return diverseFeed(sale, limit, n=>Math.max(0, n - limit));
 }
 
 function saleCarouselHTML(){
-  const items = saleCarouselItems(12);
+  const items = saleCarouselItems(4);
   return `
   <div class="sale-carousel">
     <button class="sale-arrow" style="left:-6px;" onclick="saleScroll(-1)" aria-label="Move sale items left">
@@ -1346,23 +1404,52 @@ function brandBarHTML(){
   </section>`;
 }
 
-/* New Arrivals feed — always exactly `limit` cards, with the men's & women's
-   innerwear lines taking the front slots before any other new arrivals. */
-const INNERWEAR_CATS = ['mens-underwear','womens-underwear'];
+/* Home rails pick products from DIFFERENT sub-categories: candidates go in
+   tagged-first order and `diverseFeed` then takes one product per
+   sub-category per round, so no rail can ever fill up with a single
+   category (the old feeds were built from innerwear alone). */
+function diverseFeed(candidates, limit, offsetOf){
+  const byCat = {};
+  candidates.forEach(p=>{ (byCat[p.category] = byCat[p.category] || []).push(p); });
+  /* Sub-categories are visited in the store's own navigation order, so a rail
+     reads the same way no matter how the database rows happen to be sorted. */
+  const order = {};
+  STORE_CATEGORIES.forEach((c, idx)=>{ order[c.id] = idx; });
+  const cats = Object.keys(byCat).sort((a,b)=>(order[a] ?? 999) - (order[b] ?? 999));
+  const n = cats.length;
+  if(!n) return [];
+  /* Each rail starts at a different point in that order, so the three rails
+     put together cover the whole store instead of repeating the same rows. */
+  const start = offsetOf ? (offsetOf(n) % n + n) % n : 0;
+  const out = [];
+  let i = 0;
+  while(out.length < limit && cats.some(c=>byCat[c].length)){
+    const item = byCat[cats[(start + i) % n]].shift();
+    if(item) out.push(item);
+    i++;
+  }
+  return out;
+}
+
+/* New Arrivals — exactly 8 products, each from its own sub-category; items
+   tagged "new" get first pick inside their own sub-category. */
 function newArrivalsFeed(limit=8){
-  const isIn  = p => INNERWEAR_CATS.includes(p.category);
   const isNew = p => Array.isArray(p.tags) && p.tags.includes('new');
-  const ordered = [
-    ...DB.products.filter(p=> isIn(p) &&  isNew(p)),
-    ...DB.products.filter(p=> isIn(p) && !isNew(p)),
-    ...DB.products.filter(p=>!isIn(p) &&  isNew(p)),
-    ...DB.products.filter(p=>!isIn(p) && !isNew(p))
-  ];
-  return ordered.slice(0, limit);
+  const pool = DB.products.filter(p=>p.category!=='gift-cards');
+  const candidates = pool.filter(isNew).concat(pool.filter(p=>!isNew(p)));
+  return diverseFeed(candidates, limit, n=>Math.floor(n/3));
+}
+
+/* Best Sellers — exactly 8 products, spread across sub-categories the same way. */
+function bestSellersFeed(limit=8){
+  const isBest = p => Array.isArray(p.tags) && p.tags.includes('bestseller');
+  const pool = DB.products.filter(p=>p.category!=='gift-cards');
+  const candidates = pool.filter(isBest).concat(pool.filter(p=>!isBest(p)));
+  return diverseFeed(candidates, limit);
 }
 
 function renderHome(){
-  const bestsellers = DB.products.filter(p=>p.tags.includes('bestseller')).slice(0,8);
+  const bestsellers = bestSellersFeed(8);
   const arrivals = newArrivalsFeed(8);
   const html = `
   ${heroSliderHTML()}
@@ -1523,6 +1610,12 @@ function renderProduct(id){
   $('#app').innerHTML = `
   <div class="page wrap pd-page">
     <div class="breadcrumb"><a href="#/home">Home</a> / <a href="#/category/${p.category}">${p.categoryName}</a> / <span>${p.title}</span></div>
+    ${(SESSION.user && (SESSION.user.role||'customer')==='admin') ? `
+    <div class="pd-admin-bar">
+      <span class="pd-admin-tag">ADMIN</span>
+      <span class="pd-admin-note">You can change this product's photo, price, name and other details.</span>
+      <a class="btn btn-outline btn-sm" href="#/admin/products/edit/${p.id}">✏️ Edit this product</a>
+    </div>` : ''}
     <div class="pd-grid">
       <div>
         <div class="pd-gallery-main ${p.category==='gift-cards'?'contain':''}" id="pd-main" onclick="toggleZoom()">
@@ -2702,7 +2795,7 @@ function renderStatic(key){
 
 /* ---------------- ADMIN DASHBOARD ---------------- */
 function adminNavItem(id,label){ return `<a class="${VIEW.adminTab===id?'active':''}" href="#/admin/${id}">${label}</a>`; }
-function renderAdmin(tab){
+function renderAdmin(tab, editId){
   /* Server-side this is enforced by api.php (admin JWT required for /save);
      the router already bounces non-admins — this is the last line of defence. */
   if(!SESSION.user || (SESSION.user.role || 'customer') !== 'admin'){
@@ -2730,6 +2823,12 @@ function renderAdmin(tab){
     </div>
     <div class="admin-main">${body}</div>
   </div>`;
+
+  /* #/admin/products/edit/<id> — opened from the product page's Edit button. */
+  if(editId){
+    if(findProduct(editId)) openProductForm(editId);
+    else toast('That product no longer exists');
+  }
 }
 
 function adminOverview(){
@@ -2751,22 +2850,44 @@ function adminOverview(){
 
 function adminProducts(){
   return `
-  <div class="admin-topbar"><h2 class="serif" style="font-size:28px;">Product Catalog Management</h2><button class="btn btn-primary btn-sm" onclick="openProductForm()">+ Add Product</button></div>
+  <div class="admin-topbar">
+    <h2 class="serif" style="font-size:28px;">Product Catalog Management</h2>
+    <div class="admin-topbar-actions">
+      <input class="ap-search" id="ap-search" placeholder="🔍 Search name, category or ID…" value="${VIEW.productQuery||''}" oninput="filterAdminProducts(this.value)">
+      <button class="btn btn-primary btn-sm" onclick="openProductForm()">+ Add Product</button>
+    </div>
+  </div>
   <div class="admin-panel" style="padding:0;">
     <table class="admin-table">
       <thead><tr><th>Image</th><th>Title</th><th>Category</th><th>Price</th><th>Stock</th><th>Actions</th></tr></thead>
-      <tbody>${DB.products.map(p=>`
-        <tr>
-          <td><img src="${p.images[0]}" onerror="imgFallback(this,'${p.category}')"></td>
-          <td><b>${p.title}</b></td>
-          <td>${p.categoryName}</td>
-          <td class="mono">${money(p.discountPrice||p.price)}</td>
-          <td class="mono">${p.stock}</td>
-          <td><a class="icon-link" onclick="openProductForm('${p.id}')">Edit</a><a class="icon-link danger" onclick="deleteProduct('${p.id}')">Delete</a></td>
-        </tr>`).join('')}</tbody>
+      <tbody id="ap-rows">${adminProductRows(VIEW.productQuery)}</tbody>
     </table>
   </div>
   <div id="product-form-slot"></div>`;
+}
+
+/* Live search over the (174-row) catalog so any stored product can be found
+   and edited in a couple of keystrokes. */
+function filterAdminProducts(q){
+  VIEW.productQuery = q;
+  const el = document.getElementById('ap-rows');
+  if(el) el.innerHTML = adminProductRows(q);
+}
+function adminProductRows(q){
+  q = String(q||'').trim().toLowerCase();
+  const list = DB.products.filter(p=>!q || (p.title+' '+p.categoryName+' '+p.id).toLowerCase().includes(q));
+  if(!list.length){
+    return `<tr><td colspan="6" style="text-align:center;color:var(--ink-soft);padding:28px 12px;">No products match your search.</td></tr>`;
+  }
+  return list.map(p=>`
+    <tr>
+      <td><img src="${p.images[0]}" onerror="imgFallback(this,'${p.category}')"></td>
+      <td><b>${p.title}</b></td>
+      <td>${p.categoryName}</td>
+      <td class="mono">${money(p.discountPrice||p.price)}</td>
+      <td class="mono">${p.stock}</td>
+      <td><a class="icon-link" onclick="openProductForm('${p.id}')">Edit</a><a class="icon-link danger" onclick="deleteProduct('${p.id}')">Delete</a></td>
+    </tr>`).join('');
 }
 
 /* ---- Admin product form: main category → sub-category, colours, sizes ---- */
@@ -2805,6 +2926,12 @@ function openProductForm(id){
   const selSizes = (p && p.sizes) ? p.sizes : ['S','M','L','XL','2XL'];
   const tags   = p ? (p.tags||[]) : ['new'];
 
+  /* Photo: an uploaded picture is kept as a data-URL on VIEW.pfUpload so the
+     URL field stays readable (nobody wants 50 KB of base64 in an input). */
+  const firstImg = (p && p.images && p.images[0]) || '';
+  VIEW.pfUpload = firstImg.startsWith('data:') ? firstImg : null;
+  const photoUrl = VIEW.pfUpload ? '' : firstImg;
+
   const html = `
   <div class="admin-panel">
     <h3>${p?'Edit Product':'Add New Product'}</h3>
@@ -2821,7 +2948,20 @@ function openProductForm(id){
       <div class="form-row"><label>Regular Price (Rs.)</label><input id="pf-price" type="number" value="${p?p.price:''}"></div>
       <div class="form-row"><label>Discount Sale Price (Rs.)</label><input id="pf-dprice" type="number" value="${p&&p.discountPrice?p.discountPrice:''}"></div>
       <div class="form-row"><label>Stock Quantity</label><input id="pf-stock" type="number" value="${p?p.stock:20}"></div>
-      <div class="form-row"><label>Image URL</label><input id="pf-image" value="${p?p.images[0]:''}" placeholder="../images/… or https://…"></div>
+
+      <div class="form-row" style="grid-column:1/-1;"><label>Photo</label>
+        <div class="pf-photo">
+          <div class="pf-photo-preview"><img id="pf-photo-img" alt="Product photo"></div>
+          <div class="pf-photo-tools">
+            <input id="pf-image" value="${photoUrl}" placeholder="Paste an image URL — or upload a photo below" oninput="pfPreviewPhoto()">
+            <div class="pf-photo-actions">
+              <label class="btn btn-outline btn-sm pf-upload">📷 Upload photo<input type="file" accept="image/*" onchange="pfUploadPhoto(this)"></label>
+              ${VIEW.pfUpload?'<button type="button" class="btn btn-outline btn-sm" onclick="pfRemoveUpload(this)">Remove uploaded photo</button>':''}
+            </div>
+            <span class="pick-note">Upload a picture from your computer (it is resized automatically to keep the database light) or paste a link such as <code>../images/mens-shirts/05.jpg</code>.</span>
+          </div>
+        </div>
+      </div>
 
       <div class="form-row" style="grid-column:1/-1;"><label>Colours</label>
         <div class="pick-row" id="pf-colors">
@@ -2856,7 +2996,84 @@ function openProductForm(id){
 
   $('#product-form-slot').innerHTML = html;
   fillSubcats(active.key, p ? p.category : null);
+  pfPreviewPhoto();
   $('#product-form-slot').scrollIntoView({behavior:'smooth'});
+}
+
+/* ---------------- PHOTO: preview, URL, and upload with auto-resize ---------------- */
+/* The MySQL `images` column is TEXT (64 KB), so an uploaded photo must be
+   stored as a compact JPEG data-URL well under that limit. */
+const PF_PHOTO_MAX_CHARS = 55000;
+
+function pfCurrentPhoto(){
+  const inp = document.getElementById('pf-image');
+  const url = inp ? inp.value.trim() : '';
+  return url || VIEW.pfUpload || '';
+}
+function pfPreviewPhoto(){
+  const img = document.getElementById('pf-photo-img');
+  if(!img) return;
+  const src = pfCurrentPhoto();
+  if(!src){ img.style.display='none'; img.removeAttribute('src'); return; }
+  img.style.display='';
+  if(img.getAttribute('src') !== src) img.src = src;
+}
+function pfUploadPhoto(input){
+  const f = input && input.files && input.files[0];
+  if(f) pfApplyPhoto(f, input);
+}
+function pfApplyPhoto(file, inputEl){
+  if(!file || !file.type || !file.type.startsWith('image/')){ toast('Please choose an image file'); return; }
+  compressPhoto(file, (dataUrl, err)=>{
+    if(!dataUrl){ toast(err || 'Could not read that image'); return; }
+    VIEW.pfUpload = dataUrl;
+    const inp = document.getElementById('pf-image');
+    if(inp){ inp.value=''; inp.placeholder='Uploaded photo in use — paste a URL to replace it'; }
+    pfPreviewPhoto();
+    if(inputEl) inputEl.value='';   /* allow re-picking the same file */
+    toast('Photo added ✓ — press Save Product to apply it');
+  });
+}
+function pfRemoveUpload(btn){
+  VIEW.pfUpload = null;
+  if(btn && btn.parentNode) btn.parentNode.removeChild(btn);
+  pfPreviewPhoto();
+}
+function compressPhoto(file, cb){
+  const reader = new FileReader();
+  reader.onerror = ()=>cb(null,'Could not read that file');
+  reader.onload = e=>{
+    const img = new Image();
+    img.onerror = ()=>cb(null,'That file is not a usable image');
+    img.onload = ()=>{
+      if(!img.width || !img.height){ cb(null,'That file is not a usable image'); return; }
+      const scale = Math.min(1, 800/Math.max(img.width, img.height));
+      let w = Math.max(1, Math.round(img.width*scale));
+      let h = Math.max(1, Math.round(img.height*scale));
+      let q = 0.72;
+      const cv = document.createElement('canvas');
+      const cx = cv.getContext('2d');
+      const encode = ()=>{
+        cv.width = w; cv.height = h;
+        cx.fillStyle = '#FFFFFF'; cx.fillRect(0,0,w,h);   /* JPEG has no alpha */
+        cx.drawImage(img, 0, 0, w, h);
+        return cv.toDataURL('image/jpeg', Math.max(0.3, q));
+      };
+      let out = '', guard = 0;
+      do {
+        try{ out = encode(); }
+        catch(err){ cb(null,'Could not encode that photo'); return; }
+        if(out.length <= PF_PHOTO_MAX_CHARS) break;
+        if(q > 0.4){ q -= 0.1; }
+        else if(w > 200){ w = Math.round(w*0.8); h = Math.round(h*0.8); q = 0.6; }
+        else { break; }
+      } while(guard++ < 24);
+      if(out.length > PF_PHOTO_MAX_CHARS){ cb(null,'That photo is too large to store — try a smaller image'); return; }
+      cb(out);
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
 }
 
 async function saveProduct(){
@@ -2873,6 +3090,9 @@ async function saveProduct(){
   const groupKey = groupSel ? groupSel.value : '';
   const group = megaGroups().find(x => x.key === groupKey) || null;
 
+  const photo = pfCurrentPhoto();
+  const prevImages = (existing && Array.isArray(existing.images)) ? existing.images : [];
+
   const data = {
     title:$('#pf-title').value.trim(),
     category:cat.id, categoryName:cat.name,
@@ -2880,9 +3100,10 @@ async function saveProduct(){
     price:+$('#pf-price').value,
     discountPrice: $('#pf-dprice').value ? +$('#pf-dprice').value : null,
     stock:+$('#pf-stock').value,
-    images: (existing && existing.images[0] === $('#pf-image').value && existing.images.length)
-      ? existing.images
-      : [$('#pf-image').value || generateProductImage(cat.id, 'new')],
+    images: (photo && prevImages[0] === photo)
+      ? prevImages                                  /* unchanged — keep every gallery image */
+      : (photo ? [photo, ...prevImages.slice(1)]    /* replaced the main photo */
+               : [generateProductImage(cat.id, 'new')]),
     colors: colors.length ? colors : ['black','white'],
     sizes: sizes.length ? sizes : ['Free Size'],
     tags: tags.length ? tags : ['new'],
@@ -2902,7 +3123,7 @@ async function saveProduct(){
       createdAt:Date.now()
     });
   }
-  await saveDB(); toast('Product saved ✓'); renderAdmin('products');
+  await saveDB(); toast('Product saved ✓'); VIEW.pfUpload = null; renderAdmin('products');
 }
 
 async function deleteProduct(id){
@@ -3229,7 +3450,7 @@ function renderRoute(){
   else if(route==='signup') renderAuth('signup');
   else if(route==='profile') renderProfile(parts[1]);
   else if(route==='support') renderStatic(parts[1]);
-  else if(route==='admin') renderAdmin(parts[1]);
+  else if(route==='admin') renderAdmin(parts[1], parts[2]==='edit' ? parts[3] : null);
   else renderHome();
 }
 window.addEventListener('hashchange', renderRoute);
@@ -3342,6 +3563,7 @@ function initSantaFloat(){
 (async function init(){
   await loadStorage();
   ensureGiftCards();
+  applyCatalogVersion();
   ensureCatalogDelta();
   ensureSeedAdmins();
   enforceSaleQuota();
