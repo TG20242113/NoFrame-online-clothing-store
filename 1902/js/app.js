@@ -53,10 +53,10 @@ let DB = {
   categories: SEED_CATS,
   products: SEED_PRODUCTS,
   orders: [],
-  reviews: [
-    {productId:'P1', userName:'Kasun Perera', rating:5, comment:'Exceptional quality and fit! Shipped fast to Colombo.'},
-    {productId:'P1', userName:'Dilani Fernando', rating:5, comment:'Fabric feels ultra premium. Highly recommended.'}
-  ],
+  /* Real example feedback is written by seedExampleData() below, from products
+     that actually exist — nothing points at a placeholder id any more. */
+  reviews: [],
+  questions: [],
   users: [{id:'U1',name:'Demo Customer',email:'demo@noframe.com',password:'demo123',phone:'+94 77 123 4567',address:'128 Galle Road, Colombo 03',role:'customer',promo:true}]
 };
 let SESSION = {user:null, cart:[], wishlist:[]};
@@ -84,6 +84,9 @@ async function loadStorage(){
       /* /load only sends the customer directory to administrators. Keep this
          browser's own local accounts so offline/fallback sign-in still works. */
       if(!Array.isArray(DB.users) || !DB.users.length) DB.users = localUsers;
+      DB.orders = DB.orders || [];
+      DB.reviews = DB.reviews || [];
+      DB.questions = DB.questions || [];
     }
   }catch(e){
     console.warn('MySQL API unavailable; using browser fallback.', e);
@@ -92,16 +95,39 @@ async function loadStorage(){
       if(raw) DB = JSON.parse(raw);
     }catch(_){}
   }
-  try{
+  DB.questions = DB.questions || [];  try {
     const s = localStorage.getItem('noframe-session');
     if(s) SESSION = JSON.parse(s);
-  }catch(e){}
+  } catch(e){}
+  restoreLocalAvatar(SESSION.user);
   /* CART PRIVACY: the bag and wishlist are reloaded from the key that belongs
      to whoever is actually signed in, so one customer's items can never show
      up in another customer's session. */
   const uid = SESSION.user && SESSION.user.id;
   SESSION.cart     = restoreBag('cart', uid, SESSION.cart);
   SESSION.wishlist = restoreBag('wishlist', uid, SESSION.wishlist);
+}
+
+/* BAG HYGIENE — run once after the catalogue is final.
+   A bag (or wishlist) saved before a catalogue rebuild, or before an admin
+   deleted a product, keeps ids that no longer exist. Those rows silently
+   vanished from the bag and made checkout throw, which is why "Add to bag" /
+   "Buy It Now" looked dead. Drop them here, once, and say so. */
+async function pruneDanglingBagItems(){
+  let removed = 0;
+  ['cart','wishlist'].forEach(kind=>{
+    const list = SESSION[kind];
+    if(!Array.isArray(list) || !list.length) return;
+    const kept = list.filter(it => it && findProduct(it.productId));
+    if(kept.length !== list.length){
+      removed += list.length - kept.length;
+      SESSION[kind] = kept;
+    }
+  });
+  if(!removed) return;
+  await saveSession();
+  console.info(removed + ' unavailable item(s) cleared from your bag');
+  setTimeout(()=>toast(removed + ' item(s) no longer in the catalogue were cleared from your bag'), 700);
 }
 
 /* Per-user bag storage — keyed by account id (or "guest"). */
@@ -330,9 +356,10 @@ async function saveDB(){
     if(!remote.ok) throw new Error(remote.message||'Save failed');
   }catch(e){
     const msg = String(e.message||e);
-    if(msg.includes('API 403')){
-      /* /save is admin-only (server-side RBAC) — expected for customers. */
-      console.info('Save skipped: admin-only endpoint — kept the browser copy.');
+    if(msg.includes('API 403') || msg.includes('API 401')){
+      /* /save is admin-only (server-side RBAC) — expected for customers, and
+         for a restored admin session whose sign-in cookie has expired. */
+      console.info('Save skipped: no administrator session — kept the browser copy.');
     } else if(/^API (501|502|503|504)$/.test(msg) || /fetch|network|Failed to fetch/i.test(msg)){
       /* No PHP/API running (static preview, XAMPP stopped): not a data loss —
          the browser copy above is already written. */
@@ -386,7 +413,12 @@ async function syncLivePrices(){
       });
       if(changed){
         renderHeader();
-        renderRoute();
+        /* Never rebuild a screen the shopper is in the middle of using:
+           re-rendering the product page resets the size/colour they just
+           picked and can swallow the Add-to-bag / Buy-now click itself. */
+        const route = (location.hash || '').replace('#/','').split('?')[0].split('/')[0];
+        const HOLDS_USER_INPUT = ['product','checkout','cart','login','signup','profile','account','admin'];
+        if(!HOLDS_USER_INPUT.includes(route)) renderRoute();
       }
     }
   }catch(e){ console.warn('Live price sync unavailable', e); }
@@ -412,6 +444,8 @@ function setCurrency(code){
   renderHeader();
   renderRoute();
 }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
 function money(n){
   const v = Number(n) * CURRENCY.rate;
   if(CURRENCY.code==='USD') return '$' + v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -429,6 +463,18 @@ function stars(rating){
 function findProduct(id){ return DB.products.find(p=>p.id===id); }
 function cartCount(){ return SESSION.cart.reduce((s,i)=>s+i.qty,0); }
 function cartTotal(){ return SESSION.cart.reduce((s,i)=>{const p=findProduct(i.productId); if(!p) return s; const price=p.discountPrice||p.price; return s+price*i.qty;},0); }
+
+/* Only bag entries whose product still exists are handed to checkout or to an
+   order. A bag saved before a catalogue rebuild can still reference ids that
+   were dropped — without this the checkout render threw and the page froze. */
+function bagItemsForOrder(){
+  return SESSION.cart
+    .filter(it => it && findProduct(it.productId))
+    .map(it => {
+      const p = findProduct(it.productId);
+      return {...it, title:p.title, price:p.discountPrice||p.price, image:(p.images||[])[0]||''};
+    });
+}
 
 /* ---------------- LOYALTY POINTS + CASH ON DELIVERY ---------------- */
 /* 1% of every purchase is added as points; 1 point = Rs. 10.
@@ -1569,10 +1615,24 @@ function renderListing(title, baseList){
             <option value="rating" ${FILTER.sort==='rating'?'selected':''}>Highest Rated</option>
           </select>
         </div>
-        ${list.length?`<div class="product-grid">${list.map(productCard).join('')}</div>`:`<div class="empty-state"><p>No products match your filter criteria.</p><button class="btn btn-outline" style="margin-top:14px;" onclick="resetFilters()">Reset Filters</button></div>`}
+        ${list.length?`<div class="product-grid">${list.map(productCard).join('')}</div>`:`<div class="empty-state"><p>No products match your filter criteria.</p><button class="btn btn-outline" style="margin-top:14px;" onclick="resetFilters()">Reset Filters</button></div>      `}
       </div>
     </div>
   </div>`;
+}
+
+/* NO LEFTOVER CREDENTIALS: the sign-in form is always rendered empty, so a
+   previous account's email or password can never appear on it again. */
+function clearAuthForm(){
+  const wipe = ()=>{
+    ['au-email','au-pass','au-name','au-phone','au-confirm-pass'].forEach(id=>{
+      const el = document.getElementById(id);
+      if(el){ el.value = ''; el.setAttribute('autocomplete','off'); }
+    });
+  };
+  wipe();
+  if(window.requestAnimationFrame) requestAnimationFrame(wipe);
+  setTimeout(wipe, 150);
 }
 
 function toggleCatFilter(id){ FILTER.catFilter.has(id)?FILTER.catFilter.delete(id):FILTER.catFilter.add(id); renderRoute(); }
@@ -1603,7 +1663,7 @@ function initPdTilt(){
 function renderProduct(id){
   const p = findProduct(id);
   if(!p){ $('#app').innerHTML = `<div class="page wrap"><p>Product not found.</p></div>`; return; }
-  VIEW.gallery=0; VIEW.selColor=p.colors[0]; VIEW.selSize=p.sizes[0]||'M'; VIEW.qty=1; VIEW.zoom=false;
+  VIEW.gallery=0; VIEW.selColor=p.colors[0]; VIEW.selSize=p.sizes[0]||'M'; VIEW.qty=1; VIEW.zoom=false; VIEW.revRating=5;
   const related = DB.products.filter(r=>r.category===p.category && r.id!==p.id).slice(0,4);
   const isWish = SESSION.wishlist.includes(p.id);
 
@@ -1672,6 +1732,7 @@ function renderProduct(id){
     </div>
   </div>
   ${customerReviewsSection(p)}
+  ${productQuestionsSection(p)}
   <section class="section section-alt">
     <div class="wrap">
       <div class="section-head"><div><div class="eyebrow">Complete Your Look</div><h2>You May Also Like</h2></div></div>
@@ -1755,32 +1816,158 @@ function customerReviewsSection(p){
               <div class="review-card-top">
                 <span class="review-avatar">${initials(r.userName)}</span>
                 <div class="review-who"><b>${r.userName}</b><span>${stars(r.rating)} ${r.rating}.0</span></div>
-                <span class="verified-pill">✓ Verified</span>
+                <span class="verified-pill">${r.verified ? '✓ Verified purchase' : '✓ Verified'}</span>
               </div>
               <p>${r.comment}</p>
-              <span class="review-date">${r.seeded?'Purchased online':'Just now'}</span>
+              <span class="review-date">${r.seeded ? 'Purchased online' : (r.createdAt ? new Date(Number(r.createdAt)).toLocaleDateString() : 'Just now')}</span>
             </article>`).join('')}
         </div>
       </div>
-      <div class="review-form">
-        <h5>Leave a Review</h5>
-        <input id="rev-name" placeholder="Your Name">
-        <textarea id="rev-comment" placeholder="Write your review…" rows="3"></textarea>
-        <button class="btn btn-primary btn-sm" onclick="submitReview('${p.id}')">Submit Review</button>
-      </div>
+      ${feedbackBlock(p)}
     </div>
   </section>`;
+}
+
+/* Feedback is reserved for customers who actually bought this product:
+   nobody can post a review for something they have not ordered. */
+function hasPurchased(productId){
+  if(!SESSION.user) return false;
+  const uid = SESSION.user.id;
+  return (DB.orders || []).some(o =>
+    o.userId === uid && (o.items || []).some(i => i.productId === productId));
+}
+
+function feedbackBlock(p){
+  const bought = hasPurchased(p.id);
+  if(!SESSION.user){
+    return `<div class="review-form review-locked">
+      <h5>Leave a Review</h5>
+      <p class="qa-empty">Only customers who bought this product can leave feedback.
+      <a href="#/login?returnUrl=${encodeURIComponent('#/product/'+p.id)}" style="color:var(--accent);">Sign in</a> to share yours.</p>
+    </div>`;
+  }
+  if(!bought){
+    return `<div class="review-form review-locked">
+      <h5>Leave a Review</h5>
+      <p class="qa-empty">Only customers who have bought <b>${esc(p.title)}</b> can leave feedback — order it and your review box will appear here.</p>
+    </div>`;
+  }
+  const rating = VIEW.revRating || 5;
+  return `<div class="review-form">
+    <h5>Review your purchase ✓ <span class="review-note">Verified buyer</span></h5>
+    <input id="rev-name" placeholder="Your Name" value="${esc(SESSION.user.name||'')}">
+    <div class="rev-rating" id="rev-rating" aria-label="Your rating">
+      ${[1,2,3,4,5].map(n=>`<button type="button" class="rev-star ${n<=rating?'on':''}" data-r="${n}" onclick="pickRating(${n})" title="${n} star${n>1?'s':''}">★</button>`).join('')}
+      <span class="review-note" id="rev-rating-label">${rating} of 5</span>
+    </div>
+    <textarea id="rev-comment" placeholder="How was the fit, the fabric and the delivery?" rows="3"></textarea>
+    <button class="btn btn-primary btn-sm" onclick="submitReview('${p.id}')">Submit Review</button>
+  </div>`;
+}
+
+function pickRating(n){
+  VIEW.revRating = n;
+  document.querySelectorAll('#rev-rating .rev-star').forEach(b=>{
+    b.classList.toggle('on', Number(b.dataset.r) <= n);
+  });
+  const label = document.getElementById('rev-rating-label');
+  if(label) label.textContent = n + ' of 5';
 }
 
 async function submitReview(pid){
   const name = $('#rev-name').value.trim();
   const comment = $('#rev-comment').value.trim();
+  if(!hasPurchased(pid)){
+    toast('Only customers who bought this product can leave feedback');
+    return;
+  }
   if(!name || !comment){ toast('Please provide your name and comment'); return; }
-  DB.reviews.push({productId:pid, userName:name, rating:5, comment});
+  DB.reviews.push({
+    productId:pid, userId:SESSION.user.id, userName:name,
+    rating: VIEW.revRating || 5, comment, verified:true, createdAt:Date.now()
+  });
   const p = findProduct(pid);
   if(p){ p.reviewsCount = (p.reviewsCount||0) + 1; }
   await saveDB();
+  VIEW.revRating = 5;
   toast('Review submitted — thank you! ✓');
+  renderProduct(pid);
+}
+
+/* ---------------- PRODUCT QUESTIONS (Q&A) ---------------- */
+function questionsForProduct(p){
+  return (DB.questions || [])
+    .filter(q => q.productId === p.id)
+    .sort((a,b) => Number(b.createdAt||0) - Number(a.createdAt||0));
+}
+
+function productQuestionsSection(p){
+  const qs = questionsForProduct(p);
+  const when = ts => ts ? new Date(Number(ts)).toLocaleDateString('en-GB', {day:'2-digit', month:'short', year:'numeric'}) : '';
+  const signedIn = !!SESSION.user;
+  return `
+  <section class="section" id="product-questions">
+    <div class="wrap">
+      <div class="section-head">
+        <div><div class="eyebrow">Ask before you buy</div><h2>Questions & Answers</h2></div>
+        <span class="review-note">${qs.length} question${qs.length===1?'':'s'} so far</span>
+      </div>
+      <div class="qa-list">
+        ${qs.length ? qs.map(q=>`
+          <article class="qa-item ${q.answer ? '' : 'is-waiting'}">
+            <div class="qa-line qa-asked">
+              <span class="qa-badge">Q</span>
+              <div class="qa-body"><p>${esc(q.question)}</p><span class="qa-meta">${esc(q.userName||'Shopper')} · ${when(q.createdAt)}</span></div>
+            </div>
+            ${q.answer ? `
+            <div class="qa-line qa-answered">
+              <span class="qa-badge qa-badge-a">A</span>
+              <div class="qa-body"><p>${esc(q.answer)}</p><span class="qa-meta">NoFrame Team · ${when(q.answeredAt||q.createdAt)}</span></div>
+            </div>` : `<div class="qa-pending">Awaiting our team's reply — questions are usually answered within a day.</div>`}
+          </article>`).join('')
+        : `<p class="qa-empty">No questions yet — ask anything about sizes, fabric, delivery or stock.</p>`}
+      </div>
+      <div class="review-form">
+        <h5>Ask a question about this product</h5>
+        ${signedIn ? `
+          <textarea id="qa-input" rows="3" placeholder="e.g. Is this true to size, and do you have it in another colour?"></textarea>
+          <button class="btn btn-primary btn-sm" onclick="askQuestion('${p.id}')">Post question</button>
+        ` : `<p class="qa-empty">Please <a href="#/login?returnUrl=${encodeURIComponent('#/product/'+p.id)}" style="color:var(--accent);">sign in</a> to ask a question about this product.</p>`}
+      </div>
+    </div>
+  </section>`;
+}
+
+async function askQuestion(pid){
+  const el = document.getElementById('qa-input');
+  const text = el ? el.value.trim() : '';
+  if(!text){ toast('Please type your question'); return; }
+  if(!SESSION.user){
+    toast('Please sign in to ask a question');
+    nav('#/login?returnUrl=' + encodeURIComponent('#/product/' + pid));
+    return;
+  }
+  const q = {
+    id:'Q' + Date.now(), productId:pid, userId:SESSION.user.id,
+    userName:SESSION.user.name, question:text, answer:null, answeredAt:null, createdAt:Date.now()
+  };
+  DB.questions = DB.questions || [];
+  DB.questions.unshift(q);
+  try{
+    const remote = await apiRequest('ask_question', {method:'POST', body:JSON.stringify({productId:pid, question:text})});
+    if(remote && remote.ok && remote.question){
+      Object.assign(q, remote.question);      /* keep the server id/timestamp */
+    } else if(remote && remote.message){
+      DB.questions = DB.questions.filter(x => x !== q);
+      toast(remote.message);
+      renderProduct(pid);
+      return;
+    }
+  }catch(e){
+    console.warn('Question API unavailable — kept in this browser only', e);
+  }
+  await saveDB();
+  toast('Question posted — our team will answer it here ✓');
   renderProduct(pid);
 }
 
@@ -1925,6 +2112,14 @@ async function removeCartItem(idx){ SESSION.cart.splice(idx,1); await saveSessio
 /* ---------------- CHECKOUT ---------------- */
 let CHECKOUT_DATA = {name:'',email:'',phone:'',address:'',city:'',zip:'',payment:'card'};
 function renderCheckout(){
+  /* A product can disappear mid-session (catalogue rebuild, admin delete).
+     Clear those entries before drawing the page so checkout never freezes. */
+  const before = SESSION.cart.length;
+  SESSION.cart = SESSION.cart.filter(it => it && findProduct(it.productId));
+  if(SESSION.cart.length !== before){
+    writeBag('cart', SESSION.user && SESSION.user.id, SESSION.cart);
+    saveSession();
+  }
   if(!SESSION.cart.length){ nav('#/cart'); return; }
   const step = VIEW.checkoutStep;
   const sub = cartTotal(); const delivery = sub>=5000?0:1500; const total=sub+delivery;
@@ -1936,7 +2131,7 @@ function renderCheckout(){
   let body='';
   if(step===1){
     body = `<div class="summary-card"><h3>Cart Items</h3>
-      ${SESSION.cart.map(it=>{const p=findProduct(it.productId);return `<div class="summary-row"><span>${p.title} (${it.size}) × ${it.qty}</span><span class="mono">${money((p.discountPrice||p.price)*it.qty)}</span></div>`;}).join('')}
+      ${bagItemsForOrder().map(it=>`<div class="summary-row"><span>${it.title} (${it.size}) × ${it.qty}</span><span class="mono">${money(it.price*it.qty)}</span></div>`).join('')}
       <div class="summary-row total"><span>Total</span><span class="mono">${money(total)}</span></div>
       <button class="btn btn-primary btn-full" style="margin-top:18px;" onclick="VIEW.checkoutStep=2;renderRoute()">Continue to Shipping Details →</button>
     </div>`;
@@ -2008,7 +2203,7 @@ function renderCheckout(){
       <div>${body}</div>
       <div class="summary-card">
         <h3>Order Summary</h3>
-        ${SESSION.cart.map(it=>{const p=findProduct(it.productId);return `<div class="summary-row"><span>${p.title} (${it.size}) × ${it.qty}</span><span class="mono">${money((p.discountPrice||p.price)*it.qty)}</span></div>`;}).join('')}
+        ${bagItemsForOrder().map(it=>`<div class="summary-row"><span>${it.title} (${it.size}) × ${it.qty}</span><span class="mono">${money(it.price*it.qty)}</span></div>`).join('')}
         <div class="summary-row"><span>Shipping</span><span class="mono">${delivery===0?'FREE':money(delivery)}</span></div>
         <div class="summary-row total"><span>Total</span><span class="mono">${money(total)}</span></div>
       </div>
@@ -2038,10 +2233,12 @@ async function placeCodOrder(){
     return;
   }
   const sub=cartTotal(); const delivery = sub>=5000?0:1500;
+  const items = bagItemsForOrder();
+  if(!items.length){ toast('Your bag is empty — add a product first'); return; }
   const order = {
     id:'NF'+Date.now().toString().slice(-6),
     userId: SESSION.user?SESSION.user.id:'guest',
-    items: SESSION.cart.map(it=>({...it, title:findProduct(it.productId).title, price:findProduct(it.productId).discountPrice||findProduct(it.productId).price, image:findProduct(it.productId).images[0]})),
+    items,
     total: sub+delivery,
     status:'Confirmed',
     paymentMethod:'cash-on-delivery',
@@ -2067,12 +2264,15 @@ function saveShipping(){
 
 async function startPayHerePayment(){
   const sub=cartTotal(); const delivery = sub>=5000?0:1500;
+  const items = bagItemsForOrder();
+  if(!items.length){ toast('Your bag is empty — add a product first'); return; }
   const order = {
     id:'NF'+Date.now().toString().slice(-6),
     userId: SESSION.user?SESSION.user.id:'guest',
-    items: SESSION.cart.map(it=>({...it, title:findProduct(it.productId).title, price:findProduct(it.productId).discountPrice||findProduct(it.productId).price, image:findProduct(it.productId).images[0]})),
+    items,
     total: sub+delivery,
     status:'Payment Pending',
+    paymentMethod:'payhere',
     shipping: {...CHECKOUT_DATA},
     createdAt: Date.now()
   };
@@ -2157,6 +2357,16 @@ function mergeGuestCart(userCart = []) {
   SESSION.cart = userCart;
 }
 
+/* The account's own wishlist is restored the same way the bag is: whatever
+   that account saved before, plus anything the guest added before signing in.
+   Without this, saveSession() would write the empty guest list over the
+   account's saved wishlist the moment you log in. */
+function mergeGuestWishlist(userId) {
+  const saved = readBag('wishlist', userId) || [];
+  const guest = (SESSION.wishlist || []).filter(id => !saved.includes(id));
+  SESSION.wishlist = saved.concat(guest);
+}
+
 /* ---------------- PASSWORD COMPLEXITY HELPERS ---------------- */
 function checkPasswordComplexity(pw) {
   return {
@@ -2233,22 +2443,17 @@ function renderAuth(mode) {
         <a class="auth-tab ${mode === 'signup' ? 'active' : ''}" href="#/signup${returnUrl ? '?returnUrl=' + encodeURIComponent(returnUrl) : ''}">Sign Up</a>
       </div>
       ${mode === 'login' ? `
-        <div class="form-row"><label>Email Address</label><input id="au-email" type="email" placeholder="you@example.com" value="demo@noframe.com"></div>
-        <div class="form-row"><label>Password</label><input id="au-pass" type="password" placeholder="••••••••" value="demo123"></div>
+        <div class="form-row"><label>Email Address</label><input id="au-email" type="email" placeholder="you@example.com" autocomplete="off" spellcheck="false"></div>
+        <div class="form-row"><label>Password</label><input id="au-pass" type="password" placeholder="••••••••" autocomplete="off"></div>
         <button class="btn btn-primary btn-full" style="margin-top:20px;" onclick="doLogin()">Login to Account</button>
-        <p class="helper-text">Demo account pre-filled — click Login to test credential verification & session state.</p>
+        <p class="helper-text">New here? Use the <b>Sign Up</b> tab above to create your account.</p>
       ` : `
-        <button type="button" class="google-btn" id="google-signup-btn" onclick="googleSignUp()">
-          <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.7-6.7C35.6 2.6 30.2 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.8 6.1C12.3 13.2 17.6 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.6c0-1.6-.1-2.8-.4-4.1H24v8.1h12.4c-.3 2.1-1.6 5.2-4.7 7.3l7.6 5.9c4.5-4.2 6.8-10.3 6.8-17.2z"/><path fill="#FBBC05" d="M10.4 28.7c-.5-1.5-.8-3.1-.8-4.7s.3-3.2.8-4.7l-7.8-6.1C1 16.4 0 20.1 0 24s1 7.6 2.6 10.8l7.8-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.6-5.9c-2 1.4-4.7 2.4-8.3 2.4-6.4 0-11.7-3.7-13.6-9.9l-7.8 6.1C6.5 42.6 14.6 48 24 48z"/></svg>
-          <span>Sign up with Google</span>
-        </button>
-        <div class="auth-divider"><span>or create an account with email</span></div>
-        <div class="form-row"><label>Full Name</label><input id="au-name" placeholder="Dev Student"></div>
-        <div class="form-row"><label>Email Address</label><input id="au-email" type="email" placeholder="user_882@devlab.io"></div>
-        <div class="form-row"><label>Mobile Number</label><input id="au-phone" placeholder="+94 77 123 4567"></div>
+        <div class="form-row"><label>Full Name</label><input id="au-name" placeholder="Your full name" autocomplete="name"></div>
+        <div class="form-row"><label>Email Address</label><input id="au-email" type="email" placeholder="you@example.com" autocomplete="email"></div>
+        <div class="form-row"><label>Mobile Number</label><input id="au-phone" placeholder="+94 77 123 4567" autocomplete="off" inputmode="tel"></div>
         <div class="form-row">
           <label>Password</label>
-          <input id="au-pass" type="password" placeholder="Create a strong password" oninput="updatePasswordComplexityUI(this.value)">
+          <input id="au-pass" type="password" placeholder="Create a strong password" autocomplete="new-password" oninput="updatePasswordComplexityUI(this.value)">
           <div class="pw-meter">
             <div class="pw-bar-track"><div id="pw-bar-fill" class="pw-bar-fill"></div></div>
             <div id="pw-rules" class="pw-rules">
@@ -2260,14 +2465,14 @@ function renderAuth(mode) {
             </div>
           </div>
         </div>
-        <div class="form-row"><label>Confirm Password</label><input id="au-confirm-pass" type="password" placeholder="Confirm your password"></div>
+        <div class="form-row"><label>Confirm Password</label><input id="au-confirm-pass" type="password" placeholder="Continue your password" autocomplete="new-password"></div>
         <button class="btn btn-primary btn-full" style="margin-top:16px;" onclick="doSignup()">Create Account</button>
       `}
       </div>
     </div>
   </div>`;
 
-  if (mode === 'signup') mountGoogleButton();
+  clearAuthForm();
 }
 
 /* The lamp scene: dark until the visitor pushes the lamp (or touches the
@@ -2357,84 +2562,6 @@ function showSignupSuccess(name, pin, nextHash, nextLabel){
 }
 let SIGNUP_EMAIL_CACHE = '';
 
-/* ---------------- GOOGLE SIGN-UP (Google Identity Services) ----------------
-   To switch Google sign-up on, create an OAuth 2.0 *Web application* client ID
-   in Google Cloud Console and paste it in BOTH places:
-     1. GOOGLE_CLIENT_ID below  (js/app.js  — public, safe to ship)
-     2. $GOOGLE_CLIENT_ID in api/config.php (server verifies the ID token)
-   Until then the button says what is missing and email sign-up works. */
-const GOOGLE_CLIENT_ID = '';
-
-function mountGoogleButton(){
-  const host = document.getElementById('google-signup-btn');
-  if(!host || !GOOGLE_CLIENT_ID) return;          /* keep the static fallback button */
-  if(window.__gisReady){ renderGoogleButton(host); return; }
-  if(window.__gisLoading) return;
-  window.__gisLoading = true;
-  const s = document.createElement('script');
-  s.src = 'https://accounts.google.com/gsi/client'; s.async = true; s.defer = true;
-  s.onload = () => {
-    window.__gisLoading = false;
-    try{
-      google.accounts.id.initialize({
-        client_id: GOOGLE_CLIENT_ID,
-        callback: r => handleGoogleCredential(r.credential)
-      });
-      window.__gisReady = true;
-      const h = document.getElementById('google-signup-btn');
-      if(h) renderGoogleButton(h);
-    }catch(e){ console.warn('Google Identity Services init failed', e); }
-  };
-  s.onerror = () => { window.__gisLoading = false; console.warn('Google Identity Services failed to load'); };
-  document.head.appendChild(s);
-}
-function renderGoogleButton(host){
-  host.innerHTML = '';
-  host.classList.add('google-host');
-  google.accounts.id.renderButton(host, {theme:'filled_black', size:'large', width:320, text:'signup_with'});
-}
-function googleSignUp(){
-  if(!GOOGLE_CLIENT_ID){
-    toast('Google sign-up needs a Google OAuth Client ID — set GOOGLE_CLIENT_ID in js/app.js and api/config.php. Email sign-up works meanwhile.');
-    return;
-  }
-  if(window.__gisReady) try{ google.accounts.id.prompt(); return; }catch(e){}
-  toast('Google sign-in is still loading — one moment…');
-}
-async function handleGoogleCredential(credential){
-  try{
-    /* Generate this customer's first-order PIN up front so the server can
-       store it on a brand-new Google account. */
-    const newPin = makeDiscountPin();
-    const remote = await apiRequest('google_auth', {
-      method:'POST',
-      body: JSON.stringify({ credential, discount_pin: newPin })
-    });
-    if(remote && remote.ok && remote.user){
-      const pin = discountPinFor(remote.user) || newPin;
-      rememberDiscountPin(remote.user.email, pin);
-      remote.user.discountPin = pin;
-      remote.user.role = remote.user.role || 'customer';
-      SESSION.user = remote.user;
-      mergeGuestCart(readBag('cart', remote.user.id));
-      await saveSession();
-      renderHeader();
-      if(remote.isNew){
-        SIGNUP_EMAIL_CACHE = remote.user.email;
-        showSignupSuccess(remote.user.name, pin, '#/profile', 'Continue to My Account');
-      } else {
-        toast('Welcome back, ' + remote.user.name + ' ✓');
-        nav('#/profile');
-      }
-      return;
-    }
-    if(remote && remote.message) toast(remote.message);
-  }catch(e){
-    console.warn('Google auth needs the PHP API (api/api.php) running', e);
-    toast('Google sign-in needs the XAMPP API running — or sign up with email below.');
-  }
-}
-
 async function doLogin() {
   const email = $('#au-email').value.trim();
   const pass = $('#au-pass').value;
@@ -2459,8 +2586,10 @@ async function doLogin() {
     if (remote && remote.ok && remote.user) {
       remote.user.role = remote.user.role || 'customer';
       remote.user.discountPin = discountPinFor(remote.user);
+      restoreLocalAvatar(remote.user);
       /* Only this account's own saved bag is restored — never another user's. */
       mergeGuestCart(remote.user.cart || readBag('cart', remote.user.id));
+      mergeGuestWishlist(remote.user.id);
       SESSION.user = remote.user;
       await saveSession();
       toast('Welcome back, ' + remote.user.name + ' ✓');
@@ -2500,6 +2629,7 @@ async function doLogin() {
   };
 
   mergeGuestCart(readBag('cart', u.id));
+  mergeGuestWishlist(u.id);
   SESSION.user = userObj;
   await saveSession();
   toast('Welcome back, ' + userObj.name + ' ✓');
@@ -2604,13 +2734,40 @@ function renderProfile(tab) {
   let body = '';
 
   if (tab === 'orders') {
-    body = myOrders.length ? myOrders.map(o => `
-      <div class="order-row">
-        <div><b class="mono">#${o.id}</b><div style="font-size:12px;color:var(--ink-soft);">${new Date(o.createdAt).toLocaleDateString()} · ${o.items.length} item(s)</div>
-        <div style="font-size:12px;color:var(--ink-soft);margin-top:3px;">${o.items.map(i=>`${i.title} × ${i.qty}`).join(', ')}</div></div>
-        <span class="status-chip status-${o.status}">${o.status}</span>
-        <span class="mono" style="font-weight:700;">${money(o.total)}</span>
-      </div>`).join('') : `<p style="color:var(--ink-soft);">No orders yet. <a href="#/home" class="btn-ghost">Start shopping →</a></p>`;
+    const when = ts => ts ? new Date(Number(ts)).toLocaleString('en-GB',
+      {day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'}) : '—';
+    const sorted = [...myOrders].sort((a,b)=>Number(b.createdAt||0)-Number(a.createdAt||0));
+    body = sorted.length ? sorted.map(o=>{
+      const items = o.items || [];
+      const sub = Number(o.subtotal) || items.reduce((s,i)=>s + Number(i.price||0)*Number(i.qty||1), 0);
+      const del = Number(o.delivery) || Math.max(0, Number(o.total||0) - sub);
+      return `
+      <div class="order-card">
+        <div class="order-card-head">
+          <div><b class="mono">#${o.id}</b><span class="order-date">${when(o.createdAt)}</span></div>
+          <span class="status-chip status-${o.status}">${o.status}</span>
+        </div>
+        <div class="order-thumbs">
+          ${items.map(i=>`<a class="order-thumb" href="#/product/${i.productId||''}" title="${esc(i.title||'Item')}"><img src="${i.image||''}" alt="${esc(i.title||'Item')}" onerror="this.style.opacity='.25'"></a>`).join('')}
+        </div>
+        <div class="order-lines">
+          ${items.map(i=>`
+            <div class="order-line">
+              <img src="${i.image||''}" alt="" onerror="this.style.opacity='.25'">
+              <div class="order-line-name"><b>${esc(i.title||'Item')}</b><span>${[i.color,i.size].filter(Boolean).join(' · ')}</span></div>
+              <span class="mono order-line-qty">${money(Number(i.price||0))} × ${i.qty||1}</span>
+              <span class="mono order-line-sum"><b>${money(Number(i.price||0)*Number(i.qty||1))}</b></span>
+            </div>`).join('')}
+        </div>
+        <div class="order-totals">
+          <div><span>Subtotal</span><b class="mono">${money(sub)}</b></div>
+          <div><span>Delivery</span><b class="mono">${money(del)}</b></div>
+          <div><span>Payment</span><b>${paymentLabel(o)}</b></div>
+          <div class="grand"><span>Total paid</span><b class="mono">${money(o.total)}</b></div>
+        </div>
+        ${orderReturnBlock(o, when)}
+      </div>`;
+    }).join('') : `<p style="color:var(--ink-soft);">No orders yet. <a href="#/home" class="btn-ghost">Start shopping →</a></p>`;
   } else if (tab === 'wishlist') {
     const items = SESSION.wishlist.map(findProduct).filter(Boolean);
     body = items.length ? `<div class="product-grid">${items.map(productCard).join('')}</div>` : `<p style="color:var(--ink-soft);">Your wishlist is empty.</p>`;
@@ -2654,6 +2811,21 @@ function renderProfile(tab) {
     
     <div class="admin-panel">
       <h3>Personal & Contact Details</h3>
+      <div class="form-row" style="grid-column:1/-1;">
+        <label>Profile Photo <span style="font-weight:400;color:var(--ink-soft);">— optional, your choice</span></label>
+        <div class="pf-photo">
+          <div class="pf-photo-preview" style="width:96px;height:96px;border-radius:50%;overflow:hidden;flex:0 0 96px;">
+            <img id="avatar-img" src="${u.avatar || '../assets/u1.svg'}" alt="${u.name}" onerror="this.src='../assets/u1.svg'">
+          </div>
+          <div class="pf-photo-tools">
+            <div class="pf-photo-actions">
+              <label class="btn btn-outline btn-sm pf-upload">📷 Upload photo<input type="file" accept="image/*" onchange="uploadAvatar(this)"></label>
+              ${isDefaultAvatar(u.avatar) ? '' : '<button type="button" class="btn btn-outline btn-sm" onclick="removeAvatar()">Remove photo</button>'}
+            </div>
+            <span class="pick-note">Add a picture only if you want to — it is resized automatically. Without one, the default avatar is shown.</span>
+          </div>
+        </div>
+      </div>
       <div class="form-2col">
         <div class="form-row"><label>Full Name</label><input id="pf-name" value="${u.name}"></div>
         <div class="form-row"><label>Email Address</label><input value="${u.email}" disabled style="background:var(--surface-alt);"></div>
@@ -2703,6 +2875,166 @@ function renderProfile(tab) {
       <div>${body}</div>
     </div>
   </div>`;
+}
+
+/* ---------------- RETURNS: customer side ----------------
+   A shopper who bought something raises a return from their OWN order history
+   (profile → My Orders). The request is stored on the order and surfaces in
+   the admin's Orders tab, where it is approved or declined. */
+const RETURNABLE_STATUSES = ['Delivered','Dispatched','Processing','Confirmed'];
+const RETURN_REASONS = ['Size does not fit','Wrong item received','Damaged or faulty','Changed my mind','Not as pictured'];
+
+function orderReturnBlock(o, when){
+  const ret = o.returnRequest;
+  if(ret){
+    const cls = ret.status==='Approved' ? 'is-approved' : ret.status==='Declined' ? 'is-declined'
+      : ret.status==='Refunded' ? 'is-refunded' : '';
+    const head = ret.status==='Approved' ? 'Return approved — we will contact you to collect the item'
+      : ret.status==='Declined' ? 'Return declined by the store'
+      : ret.status==='Refunded' ? 'Return refunded — the amount is back with your original payment method'
+      : 'Return requested — awaiting store review';
+    const detail = [ret.reason, ret.note].filter(Boolean).map(esc).join(' — ');
+    const stamps = ['Raised ' + when(ret.at)];
+    if(ret.decidedAt)  stamps.push('Decided ' + when(ret.decidedAt));
+    if(ret.refundedAt) stamps.push('Refunded ' + when(ret.refundedAt));
+    return `<div class="return-box ${cls}">
+      <b>${head}</b>
+      ${detail ? `<span>${detail}</span>` : ''}
+      <span class="return-when">${stamps.join(' · ')}</span>
+    </div>`;
+  }
+  if(!RETURNABLE_STATUSES.includes(o.status)) return '';
+  return `
+    <div class="return-cta">
+      <button type="button" class="btn btn-outline btn-sm" onclick="openReturnForm('${o.id}')">Return this order</button>
+      <span>30-day easy returns — exchange or refund</span>
+    </div>
+    <div class="return-form" id="ret-form-${o.id}" hidden>
+      <div class="form-row"><label>Reason for the return</label>
+        <select id="ret-reason-${o.id}">${RETURN_REASONS.map(r=>`<option>${r}</option>`).join('')}</select>
+      </div>
+      <div class="form-row"><label>Anything else? <span style="font-weight:400;color:var(--ink-soft);">optional</span></label>
+        <input id="ret-note-${o.id}" placeholder="Tell us what happened…"></div>
+      <div class="return-form-actions">
+        <button type="button" class="btn btn-primary btn-sm" onclick="submitReturn('${o.id}')">Send return request</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="openReturnForm('${o.id}', true)">Cancel</button>
+      </div>
+    </div>`;
+}
+
+function openReturnForm(id, hideOnly){
+  const box = document.getElementById('ret-form-' + id);
+  if(!box) return;
+  if(hideOnly){ box.hidden = true; return; }
+  box.hidden = !box.hidden;
+  if(!box.hidden){ const sel = document.getElementById('ret-reason-' + id); if(sel) sel.focus(); }
+}
+
+async function submitReturn(id){
+  const o = DB.orders.find(x => x.id === id);
+  if(!o){ toast('That order no longer exists'); return; }
+  /* OWN HISTORY ONLY: nobody can raise a return on somebody else's order. */
+  if(!SESSION.user || o.userId !== SESSION.user.id){ toast('This order does not belong to your account'); return; }
+  if(o.returnRequest){ toast('A return has already been requested for this order'); return; }
+  const reasonEl = document.getElementById('ret-reason-' + id);
+  const noteEl = document.getElementById('ret-note-' + id);
+  o.returnRequest = {
+    status:'Requested',
+    reason: reasonEl ? reasonEl.value : RETURN_REASONS[0],
+    note: noteEl ? noteEl.value.trim() : '',
+    by: SESSION.user.name,
+    at: Date.now()
+  };
+  await persistOrder(o);
+  await saveDB();
+  toast('Return request sent — the store will review it');
+  renderProfile('orders');
+}
+
+/* ---------------- RETURNS: admin side ---------------- */
+async function decideReturn(id, decision){
+  const o = DB.orders.find(x => x.id === id);
+  if(!o || !o.returnRequest) return;
+  if(decision === 'Refunded' && o.returnRequest.status !== 'Approved'){
+    toast('Approve the return before recording a refund');
+    return;
+  }
+  o.returnRequest.status = decision;
+  o.returnRequest.decidedAt = Date.now();
+  if(decision === 'Approved') o.status = 'Returned';
+  if(decision === 'Refunded'){
+    o.returnRequest.refundedAt = Date.now();
+    o.status = 'Refunded';
+  }
+  await persistOrder(o);
+  await saveDB();
+  toast(decision === 'Approved' ? 'Return approved — order marked Returned'
+    : decision === 'Refunded' ? 'Refund recorded — order marked Refunded'
+    : 'Return declined');
+  /* Stay on whichever screen the decision was made from. */
+  if(String(location.hash).indexOf('#/admin/') === 0) renderAdmin(VIEW.adminTab);
+  else renderProfile('orders');
+}
+
+/* ---------------- PROFILE PHOTO (optional) ---------------- */
+function isDefaultAvatar(a){ return !a || a === '../assets/u1.svg' || a === '/assets/u1.svg'; }
+
+/* Locally remembered photo: a customer who signed up without the PHP API (or
+   whose avatar was set while it was down) still keeps their picture. */
+function localAvatarFor(uid){
+  if(!uid) return null;
+  try{ return localStorage.getItem('noframe-avatar-' + uid); }catch(e){ return null; }
+}
+function restoreLocalAvatar(user){
+  if(!user) return user;
+  const saved = localAvatarFor(user.id);
+  if(saved && isDefaultAvatar(user.avatar)) user.avatar = saved;
+  return user;
+}
+
+function uploadAvatar(input){
+  const f = input && input.files && input.files[0];
+  if(!f) return;
+  if(!SESSION.user){ toast('Please sign in to add a profile photo'); return; }
+  compressPhoto(f, async (dataUrl, err)=>{
+    if(input) input.value = '';          /* allow re-picking the same file */
+    if(!dataUrl){ toast(err || 'Could not read that image'); return; }
+    let avatar = dataUrl;                /* browser copy, used if PHP is down */
+    try{
+      const remote = await apiRequest('upload_avatar', { method:'POST', body: JSON.stringify({dataUrl}) });
+      if(remote && remote.ok && remote.url) avatar = remote.url;
+    }catch(e){ console.warn('Avatar upload API unavailable — photo kept in this browser only.', e); }
+    await applyAvatar(avatar);
+    toast('Profile photo updated ✓');
+  }, {square:true});
+}
+
+async function removeAvatar(){
+  await applyAvatar('../assets/u1.svg');
+  toast('Profile photo removed — default avatar restored');
+}
+
+async function applyAvatar(avatar){
+  SESSION.user.avatar = avatar;
+  try{ localStorage.setItem('noframe-avatar-' + SESSION.user.id, avatar); }catch(e){}
+  const idx = DB.users.findIndex(u => u.id === SESSION.user.id);
+  if(idx > -1) DB.users[idx] = { ...DB.users[idx], avatar };
+  await saveSession();
+  try{
+    await apiRequest('profile', {
+      method:'POST',
+      body: JSON.stringify({
+        name: SESSION.user.name,
+        phone: SESSION.user.phone || '',
+        shipping_address: SESSION.user.shippingAddress || SESSION.user.address || '',
+        billing_address: SESSION.user.billingAddress || SESSION.user.address || '',
+        avatar
+      })
+    });
+  }catch(e){ console.warn('Avatar could not be stored on the server yet', e); }
+  await saveDB();
+  renderHeader();
+  if(location.hash.indexOf('#/profile') === 0 || location.hash.indexOf('#/account') === 0) renderProfile('details');
 }
 
 async function saveProfile() {
@@ -2795,6 +3127,14 @@ function renderStatic(key){
 
 /* ---------------- ADMIN DASHBOARD ---------------- */
 function adminNavItem(id,label){ return `<a class="${VIEW.adminTab===id?'active':''}" href="#/admin/${id}">${label}</a>`; }
+/* Questions still waiting for the admin's reply (shown on the sidebar link). */
+function pendingQuestions(){ return (DB.questions||[]).filter(q=>!q.answer).length; }
+/* Return requests still waiting for a decision (sidebar link counter). */
+function returnRequests(){
+  return DB.orders.filter(o => o && o.returnRequest && o.returnRequest.at)
+    .sort((a,b) => Number(b.returnRequest.at||0) - Number(a.returnRequest.at||0));
+}
+function pendingReturns(){ return returnRequests().filter(o => o.returnRequest.status === 'Requested').length; }
 function renderAdmin(tab, editId){
   /* Server-side this is enforced by api.php (admin JWT required for /save);
      the router already bounces non-admins — this is the last line of defence. */
@@ -2808,7 +3148,9 @@ function renderAdmin(tab, editId){
   else if(VIEW.adminTab==='products') body = adminProducts();
   else if(VIEW.adminTab==='categories') body = adminCategories();
   else if(VIEW.adminTab==='orders') body = adminOrders();
+  else if(VIEW.adminTab==='returns') body = adminReturns();
   else if(VIEW.adminTab==='customers') body = adminCustomers();
+  else if(VIEW.adminTab==='questions') body = adminQuestions();
 
   $('#app').innerHTML = `
   <div class="admin-shell">
@@ -2818,7 +3160,9 @@ function renderAdmin(tab, editId){
       ${adminNavItem('products','Products')}
       ${adminNavItem('categories','Categories')}
       ${adminNavItem('orders','Orders')}
+      ${adminNavItem('returns', pendingReturns() ? 'Returns (' + pendingReturns() + ')' : 'Returns')}
       ${adminNavItem('customers','Customers')}
+      ${adminNavItem('questions', pendingQuestions() ? 'Questions (' + pendingQuestions() + ')' : 'Questions')}
       <a href="#/home" style="margin-top:24px;border-top:1px solid rgba(255,255,255,0.15);padding-top:14px;">← Back to Storefront</a>
     </div>
     <div class="admin-main">${body}</div>
@@ -2844,7 +3188,7 @@ function adminOverview(){
   <div class="admin-panel">
     <h3>Recent Orders</h3>
     <table class="admin-table"><thead><tr><th>Order ID</th><th>Customer</th><th>Total</th><th>Status</th></tr></thead>
-    <tbody>${DB.orders.slice(0,6).map(o=>`<tr><td class="mono">#${o.id}</td><td>${o.shipping.name||'Guest'}</td><td class="mono">${money(o.total)}</td><td><span class="status-chip status-${o.status}">${o.status}</span></td></tr>`).join('') || `<tr><td colspan="4">No orders placed yet.</td></tr>`}</tbody></table>
+    <tbody>${[...DB.orders].sort((a,b)=>Number(b.createdAt||0)-Number(a.createdAt||0)).slice(0,6).map(o=>`<tr><td class="mono">#${o.id}</td><td>${o.shipping.name||'Guest'}<div style="font-size:12px;color:var(--ink-soft);">${o.createdAt?new Date(Number(o.createdAt)).toLocaleDateString():''}</div></td><td class="mono">${money(o.total)}</td><td><span class="status-chip status-${o.status}">${o.status}</span></td></tr>`).join('') || `<tr><td colspan="4">No orders placed yet.</td></tr>`}</tbody></table>
   </div>`;
 }
 
@@ -2854,6 +3198,7 @@ function adminProducts(){
     <h2 class="serif" style="font-size:28px;">Product Catalog Management</h2>
     <div class="admin-topbar-actions">
       <input class="ap-search" id="ap-search" placeholder="🔍 Search name, category or ID…" value="${VIEW.productQuery||''}" oninput="filterAdminProducts(this.value)">
+      <button class="btn btn-outline btn-sm" title="Write everything currently in the store back into data/catalog.js" onclick="syncCatalogFile()">⇪ Update data/catalog.js</button>
       <button class="btn btn-primary btn-sm" onclick="openProductForm()">+ Add Product</button>
     </div>
   </div>
@@ -3039,7 +3384,7 @@ function pfRemoveUpload(btn){
   if(btn && btn.parentNode) btn.parentNode.removeChild(btn);
   pfPreviewPhoto();
 }
-function compressPhoto(file, cb){
+function compressPhoto(file, cb, opts){
   const reader = new FileReader();
   reader.onerror = ()=>cb(null,'Could not read that file');
   reader.onload = e=>{
@@ -3047,16 +3392,27 @@ function compressPhoto(file, cb){
     img.onerror = ()=>cb(null,'That file is not a usable image');
     img.onload = ()=>{
       if(!img.width || !img.height){ cb(null,'That file is not a usable image'); return; }
+      const square = !!(opts && opts.square);
       const scale = Math.min(1, 800/Math.max(img.width, img.height));
       let w = Math.max(1, Math.round(img.width*scale));
       let h = Math.max(1, Math.round(img.height*scale));
+      /* PROFILE PHOTO: the picture is centre-cropped to a square on upload, so
+         it fills the round frames instead of being squashed to fit them. */
+      let sx = 0, sy = 0, sw = img.width, sh = img.height;
+      if(square){
+        const side = Math.min(img.width, img.height);
+        sx = Math.round((img.width - side)/2);
+        sy = Math.round((img.height - side)/2);
+        sw = sh = side;
+        w = h = Math.max(1, Math.min(640, side));
+      }
       let q = 0.72;
       const cv = document.createElement('canvas');
       const cx = cv.getContext('2d');
       const encode = ()=>{
         cv.width = w; cv.height = h;
         cx.fillStyle = '#FFFFFF'; cx.fillRect(0,0,w,h);   /* JPEG has no alpha */
-        cx.drawImage(img, 0, 0, w, h);
+        cx.drawImage(img, sx, sy, sw, sh, 0, 0, w, h);
         return cv.toDataURL('image/jpeg', Math.max(0.3, q));
       };
       let out = '', guard = 0;
@@ -3124,11 +3480,92 @@ async function saveProduct(){
     });
   }
   await saveDB(); toast('Product saved ✓'); VIEW.pfUpload = null; renderAdmin('products');
+  syncCatalogFile(true);   /* keep data/catalog.js matching the admin panel */
+}
+
+/* ---------------- ADMIN → data/catalog.js ---------------- */
+/* Products added or edited in the admin panel live in MySQL first; this pushes
+   the whole catalogue back into the code part (data/catalog.js) so the file on
+   disk keeps matching the admin panel. With PHP running the file is written in
+   place; without it the file is downloaded so it can be dropped in by hand. */
+async function syncCatalogFile(silent){
+  const payload = { categories: DB.categories || [], products: DB.products || [] };
+  if(!payload.products.length){ if(!silent) toast('There is nothing to export yet'); return; }
+  try{
+    const remote = await apiRequest('export_catalog', { method:'POST', body: JSON.stringify(payload) });
+    if(remote && remote.ok){
+      if(silent) console.info('data/catalog.js kept in sync (' + remote.products + ' products)');
+      else toast('data/catalog.js updated ✓ — ' + remote.products + ' products written');
+      return;
+    }
+    throw new Error((remote && remote.message) || 'Export failed');
+  }catch(e){
+    if(silent){
+      /* Automatic sync after a save: quietly skip when PHP is not running —
+         the button above still offers the manual download in that case. */
+      console.warn('Catalog file not synced automatically (API offline)', e);
+      return;
+    }
+    console.warn('Catalog export API unavailable — downloading the file instead', e);
+    downloadCatalogFile(payload);
+  }
+}
+
+function buildCatalogText(data){
+  const flags = (k, v) => v;
+  const cats = (data.categories || []).filter(c => c && c.id);
+  const known = new Set(cats.map(c => c.id));
+  const byCat = {};
+  cats.forEach(c => { byCat[c.id] = []; });
+  let kept = 0;
+  (data.products || []).forEach(p => {
+    const cid = p && p.category;
+    if(!cid || !known.has(cid)) return;
+    byCat[cid].push({
+      id: String(p.id || ''), title: String(p.title || ''),
+      price: Number(p.price) || 0,
+      discountPrice: (p.discountPrice === null || p.discountPrice === undefined || p.discountPrice === '') ? null : Number(p.discountPrice),
+      stock: Number(p.stock) || 0,
+      colors: Array.isArray(p.colors) ? p.colors : [],
+      sizes: Array.isArray(p.sizes) ? p.sizes : [],
+      tags: Array.isArray(p.tags) ? p.tags : [],
+      description: String(p.description || ''),
+      images: Array.isArray(p.images) ? p.images : []
+    });
+    kept++;
+  });
+  const catRows = cats.map(c => ({id:c.id, name:c.name||'', coverImage:c.coverImage||null}));
+  const version = new Date().toISOString().slice(0,10) + '-admin-' + Date.now();
+  return '// ============================================================\n'
+    + '// NOFRAME CATALOG DATA - GENERATED BY THE ADMIN PANEL\n'
+    + '// Written by the admin “Update data/catalog.js” button on '
+    + new Date().toLocaleString() + '\n'
+    + '// ============================================================\n\n'
+    + "const CATALOG_VERSION = '" + version + "';\n\n"
+    + 'const STORE_CATEGORIES = ' + JSON.stringify(catRows, flags, 2).replace(/\n/g, '\n') + ';\n\n'
+    + 'const STORE_PRODUCTS = ' + JSON.stringify(byCat, flags, 2) + ';\n';
+}
+
+function downloadCatalogFile(payload){
+  try{
+    const text = buildCatalogText(payload);
+    const blob = new Blob([text], {type:'text/javascript;charset=utf-8'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'catalog.js';
+    document.body.appendChild(a); a.click();
+    setTimeout(()=>{ try{ URL.revokeObjectURL(a.href); }catch(e){} a.remove(); }, 1500);
+    toast('PHP API is offline — catalog.js downloaded. Save it over data/catalog.js.');
+  }catch(e){
+    console.error(e);
+    toast('Could not build catalog.js — start XAMPP and try again');
+  }
 }
 
 async function deleteProduct(id){
   if(!confirm('Delete this product?')) return;
   DB.products = DB.products.filter(p=>p.id!==id); await saveDB(); toast('Product deleted'); renderAdmin('products');
+  syncCatalogFile(true);
 }
 
 function adminCategories(){
@@ -3144,27 +3581,184 @@ function adminCategories(){
   <p style="margin-top:16px;font-size:12.5px;color:var(--ink-soft);">Main category = the top-level menu group (Men / Women / Children / Other). Sub-category = the individual line shown in the Shop by Category ring and the mega menu.</p>`;
 }
 
+/* Statuses the admin can pick; the order's own current status is always
+   offered too, so Payment Pending / Returned rows never fall back to the
+   first option in the list. */
+const ORDER_STATUSES = ['Confirmed','Processing','Dispatched','Delivered','Returned','Refunded'];
 function adminOrders(){
-  return `
-  <div class="admin-topbar"><h2 class="serif" style="font-size:28px;">Order Fulfilment Management</h2></div>
-  <div class="admin-panel" style="padding:0;">
-    <table class="admin-table"><thead><tr><th>Order ID</th><th>Customer</th><th>Items</th><th>Total</th><th>Status</th></tr></thead>
-    <tbody>${DB.orders.map(o=>`
-      <tr>
-        <td class="mono">#${o.id}</td>
-        <td>${o.shipping.name||'Guest'} (${o.shipping.phone||''})</td>
-        <td>${o.items.length}</td>
-        <td class="mono">${money(o.total)}</td>
-        <td><select onchange="updateOrderStatus('${o.id}',this.value)">
-          ${['Confirmed','Processing','Dispatched','Delivered'].map(s=>`<option ${o.status===s?'selected':''}>${s}</option>`).join('')}
+  const newest = (VIEW.orderSort || 'newest') !== 'oldest';
+  const list = [...DB.orders].sort((a,b)=> newest
+    ? Number(b.createdAt||0) - Number(a.createdAt||0)
+    : Number(a.createdAt||0) - Number(b.createdAt||0));
+
+  const when = ts => ts ? new Date(Number(ts)).toLocaleString('en-GB',
+    {day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'}) : '—';
+  const orderSubtotal = o => (o.items||[]).reduce((s,i)=> s + Number(i.price||0)*Number(i.qty||1), 0);
+
+  const rows = list.map(o=>{
+    const sub = Number(o.subtotal) || orderSubtotal(o);
+    const del = Number(o.delivery) || Math.max(0, Number(o.total||0) - sub);
+    const open = VIEW.openOrder === o.id;
+    const summary = `
+      <tr class="ao-row ${open?'is-open':''}" onclick="toggleAdminOrder('${o.id}')">
+        <td class="mono"><b>#${o.id}</b></td>
+        <td>${o.shipping.name||'Guest'}<div style="font-size:12px;color:var(--ink-soft);">${o.shipping.phone||''}</div></td>
+        <td>${when(o.createdAt)}</td>
+        <td>${(o.items||[]).length}</td>
+        <td class="mono">${money(sub)}</td>
+        <td class="mono">${money(del)}</td>
+        <td class="mono"><b>${money(o.total)}</b></td>
+        <td><select onclick="event.stopPropagation()" onchange="event.stopPropagation();updateOrderStatus('${o.id}',this.value)">
+          ${(ORDER_STATUSES.includes(o.status) ? ORDER_STATUSES : [o.status, ...ORDER_STATUSES]).map(s=>`<option ${o.status===s?'selected':''}>${s}</option>`).join('')}
         </select></td>
-      </tr>`).join('') || `<tr><td colspan="5">No orders placed yet.</td></tr>`}</tbody>
+        <td style="white-space:nowrap;"><span class="icon-link">${open?'Hide ▲':'Details ▼'}</span></td>
+      </tr>`;
+
+    const detail = !open ? '' : `
+      <tr class="ao-detail-row"><td colspan="9">
+        <div class="order-detail">
+          <div class="od-items">
+            ${(o.items||[]).map(i=>`
+              <div class="od-item">
+                <img src="${i.image||''}" alt="${i.title||''}" onerror="this.style.visibility='hidden'">
+                <div class="od-item-name"><b>${i.title||'Item'}</b>
+                  <span>${[i.color,i.size].filter(Boolean).join(' · ')||''}</span></div>
+                <span class="od-qty">× ${i.qty||1}</span>
+                <span class="mono od-unit">${money(Number(i.price||0))}</span>
+                <span class="mono od-line"><b>${money(Number(i.price||0)*Number(i.qty||1))}</b></span>
+              </div>`).join('')}
+          </div>
+          <div class="od-totals">
+            <div class="od-total-row"><span>Date</span><b>${when(o.createdAt)}</b></div>
+            <div class="od-total-row"><span>Subtotal</span><b class="mono">${money(sub)}</b></div>
+            <div class="od-total-row"><span>Delivery</span><b class="mono">${money(del)}</b></div>
+            <div class="od-total-row od-soft"><span>Payment</span><b>${paymentLabel(o)}</b></div>
+            <div class="od-total-row od-grand"><span>Total</span><b class="mono">${money(o.total)}</b></div>
+            <div class="od-total-row od-soft"><span>Status</span><span class="status-chip status-${o.status}">${o.status}</span></div>
+            <div class="od-ship"><b>Deliver to</b><br>${o.shipping.name||'Guest'} · ${o.shipping.phone||''}<br>${o.shipping.address||''}${o.shipping.city?', '+o.shipping.city:''}</div>
+            ${adminReturnBlock(o, when)}
+          </div>
+        </div>
+      </td></tr>`;
+    return summary + detail;
+  }).join('');
+
+  const totals = list.reduce((acc,o)=>{
+    const sub = Number(o.subtotal) || orderSubtotal(o);
+    acc.sub += sub;
+    acc.total += Number(o.total||0);
+    return acc;
+  }, {sub:0, total:0});
+
+  return `
+  <div class="admin-topbar">
+    <h2 class="serif" style="font-size:28px;">Order Fulfilment Management</h2>
+    <div class="admin-topbar-actions">
+      <button class="btn btn-outline btn-sm" onclick="setOrderSort('${newest?'oldest':'newest'}')">${newest?'Oldest first ↑':'Newest first ↓'}</button>
+    </div>
+  </div>
+  <div class="stat-grid">
+    <div class="stat-card"><div class="v">${list.length}</div><div class="l">Orders</div></div>
+    <div class="stat-card"><div class="v">${money(totals.sub)}</div><div class="l">Product Value</div></div>
+    <div class="stat-card"><div class="v">${money(totals.total - totals.sub)}</div><div class="l">Delivery Collected</div></div>
+    <div class="stat-card"><div class="v">${money(totals.total)}</div><div class="l">Order Value</div></div>
+  </div>
+  <div class="admin-panel" style="padding:0;overflow-x:auto;">
+    <table class="admin-table ao-table">
+      <thead><tr><th>Order ID</th><th>Customer</th><th>Date</th><th>Items</th><th>Subtotal</th><th>Delivery</th><th>Total</th><th>Status</th><th></th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="9">No orders placed yet.</td></tr>`}</tbody>
     </table>
+  </div>
+  <p style="margin-top:14px;font-size:12.5px;color:var(--ink-soft);">Click any order row to open its full details — every line item, its photo, quantity and price, then subtotal → delivery → total.</p>`;
+}
+
+function adminReturnBlock(o, when){
+  const r = o.returnRequest;
+  if(!r) return '';
+  const head = r.status==='Approved' ? 'Return approved'
+    : r.status==='Declined' ? 'Return declined'
+    : 'Return requested';
+  const detail = [r.reason, r.note].filter(Boolean).map(esc).join(' — ');
+  return `<div class="od-return">
+    <b>${head}</b> · ${esc(r.by || 'customer')}<br>
+    ${detail ? detail + '<br>' : ''}
+    <span style="color:var(--ink-soft);">Raised ${when(r.at)}${r.decidedAt ? ' · decided ' + when(r.decidedAt) : ''}</span>
+    ${r.status==='Requested' ? `<div class="od-return-actions">
+      <button type="button" class="btn btn-primary btn-sm" onclick="decideReturn('${o.id}','Approved')">Approve return</button>
+      <button type="button" class="btn btn-outline btn-sm" onclick="decideReturn('${o.id}','Declined')">Decline</button>
+    </div>` : ''}
   </div>`;
 }
 
+/* Admin's Returns tab — every return request raised from a customer's own
+   order history, newest first, with approve / decline / refund on the row. */
+function adminReturns(){
+  const list = returnRequests();
+  const n = st => list.filter(o => o.returnRequest.status === st).length;
+  const approvedValue = list.filter(o => ['Approved','Refunded'].includes(o.returnRequest.status))
+    .reduce((s,o) => s + Number(o.total||0), 0);
+  const when = ts => ts ? new Date(Number(ts)).toLocaleString('en-GB',
+    {day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'}) : '—';
+
+  const rows = list.map(o=>{
+    const r = o.returnRequest;
+    const items = o.items || [];
+    const first = items[0] || {};
+    const detail = [r.reason, r.note].filter(Boolean).map(esc).join(' — ');
+    const more = items.length > 1
+      ? `+${items.length - 1} more item${items.length > 2 ? 's' : ''} · ` : '';
+    let actions;
+    if(r.status === 'Requested'){
+      actions = `<button type="button" class="btn btn-primary btn-sm" onclick="decideReturn('${o.id}','Approved')">Approve</button>
+                 <button type="button" class="btn btn-outline btn-sm" onclick="decideReturn('${o.id}','Declined')">Decline</button>`;
+    } else if(r.status === 'Approved'){
+      actions = `<button type="button" class="btn btn-primary btn-sm" onclick="decideReturn('${o.id}','Refunded')">Mark as refunded</button>`;
+    } else {
+      actions = `<span style="color:var(--ink-soft);font-size:12px;">Closed</span>`;
+    }
+    return `<tr>
+      <td><img src="${first.image||''}" alt="" onerror="this.style.visibility='hidden'"></td>
+      <td><b>${esc(first.title||'Item')}</b>
+        <div style="font-size:12px;color:var(--ink-soft);">${more}${esc(o.shipping.name||'Guest')}</div></td>
+      <td class="mono">#${o.id}
+        <div style="font-size:11.5px;color:var(--ink-soft);">Ordered ${when(o.createdAt)}</div></td>
+      <td class="rt-reason">${detail || '—'}
+        <div style="font-size:11.5px;color:var(--ink-soft);margin-top:4px;">Raised ${when(r.at)}${r.decidedAt ? ' · decided ' + when(r.decidedAt) : ''}${r.refundedAt ? ' · refunded ' + when(r.refundedAt) : ''}</div></td>
+      <td class="mono"><b>${money(o.total)}</b></td>
+      <td><span class="ret-chip ret-${String(r.status).toLowerCase()}">${esc(r.status)}</span>
+        <div style="font-size:11.5px;color:var(--ink-soft);margin-top:5px;">Order: ${esc(o.status)}</div></td>
+      <td style="min-width:230px;">${actions}
+        <div style="margin-top:8px;"><a class="icon-link" onclick="openOrderInOrders('${o.id}')">View order</a></div></td>
+    </tr>`;
+  }).join('');
+
+  return `
+  <div class="admin-topbar">
+    <h2 class="serif" style="font-size:28px;">Returns &amp; Refunds</h2>
+    <div class="admin-topbar-actions"><span class="status-chip">${pendingReturns()} awaiting decision</span></div>
+  </div>
+  <div class="stat-grid">
+    <div class="stat-card"><div class="v">${list.length}</div><div class="l">Return Requests</div></div>
+    <div class="stat-card"><div class="v">${n('Requested')}</div><div class="l">Awaiting Decision</div></div>
+    <div class="stat-card"><div class="v">${n('Approved') + n('Refunded')}</div><div class="l">Approved / Refunded</div></div>
+    <div class="stat-card"><div class="v">${money(approvedValue)}</div><div class="l">Value In Returns</div></div>
+  </div>
+  <div class="admin-panel" style="padding:0;overflow-x:auto;">
+    <table class="admin-table">
+      <thead><tr><th>Photo</th><th>Item</th><th>Order</th><th>Reason</th><th>Amount</th><th>Status</th><th>Action</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="7" style="text-align:center;color:var(--ink-soft);padding:32px 12px;">No return requests yet. A customer raises one from <b>My Orders</b> in their profile and it lands here.</td></tr>`}</tbody>
+    </table>
+  </div>
+  <p style="margin-top:14px;font-size:12.5px;color:var(--ink-soft);">Approving marks the order <b>Returned</b>; refunding closes it as <b>Refunded</b>. The customer sees the same status in their own order history.</p>`;
+}
+
+function openOrderInOrders(id){ VIEW.openOrder = id; nav('#/admin/orders'); }
+
+function setOrderSort(dir){ VIEW.orderSort = dir; renderAdmin('orders'); }
+function toggleAdminOrder(id){ VIEW.openOrder = (VIEW.openOrder === id) ? null : id; renderAdmin('orders'); }
+
 async function updateOrderStatus(id,status){
-  const o = DB.orders.find(x=>x.id===id); if(o) o.status=status; await saveDB(); toast('Order status updated ✓');
+  const o = DB.orders.find(x=>x.id===id); if(o) o.status=status; await saveDB(); toast('Order status updated ✓'); renderAdmin('orders');
 }
 
 /* Admin-only customer directory — a completely separate view from the
@@ -3188,6 +3782,72 @@ function adminCustomers(){
     <table class="admin-table"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Orders</th><th>Lifetime Spend</th><th>Joined</th></tr></thead>
     <tbody>${rows || `<tr><td colspan="6">No customer accounts yet.</td></tr>`}</tbody></table>
   </div>`;
+}
+
+/* Admin's new Questions tab — every question shoppers asked on a product page,
+   newest first, with the reply box right in the row. */
+function adminQuestions(){
+  const qs = [...(DB.questions||[])].sort((a,b)=>Number(b.createdAt||0)-Number(a.createdAt||0));
+  const when = ts => ts ? new Date(Number(ts)).toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '—';
+
+  const rows = qs.map(q=>{
+    const p = findProduct(q.productId);
+    return `<tr>
+      <td>${p ? `<img src="${p.images[0]}" alt="" onerror="this.style.visibility='hidden'">` : '<span class="role-badge">—</span>'}</td>
+      <td><b>${p ? esc(p.title) : esc(q.productId)}</b><div style="font-size:12px;color:var(--ink-soft);">${p ? esc(p.categoryName||'') : 'product removed'}</div></td>
+      <td>${esc(q.userName||'Shopper')}<div style="font-size:12px;color:var(--ink-soft);">${when(q.createdAt)}</div></td>
+      <td class="qa-question-cell">${esc(q.question)}</td>
+      <td>${q.answer
+        ? `<div class="qa-answer-text">${esc(q.answer)}</div><a class="icon-link danger" onclick="clearAnswer('${q.id}')">Remove reply</a>`
+        : `<span class="status-chip status-Pending">Awaiting reply</span>`}</td>
+      <td style="min-width:260px;">
+        <input id="qa-answer-${q.id}" value="${q.answer ? esc(q.answer).replace(/\r?\n/g, ' ') : ''}" placeholder="Type your reply…" style="width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--surface);margin-bottom:8px;">
+        <button class="btn btn-primary btn-sm" onclick="answerQuestion('${q.id}')">${q.answer ? 'Update reply' : 'Post reply'}</button>
+      </td>
+    </tr>`;
+  }).join('');
+
+  return `
+  <div class="admin-topbar">
+    <h2 class="serif" style="font-size:28px;">Customer Questions</h2>
+    <div class="admin-topbar-actions"><span class="status-chip">${pendingQuestions()} awaiting reply</span></div>
+  </div>
+  <div class="admin-panel" style="padding:0;overflow-x:auto;">
+    <table class="admin-table">
+      <thead><tr><th>Product</th><th>Item</th><th>Asked by</th><th>Question</th><th>Our reply</th><th>Answer</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="6" style="text-align:center;color:var(--ink-soft);padding:28px 12px;">No customer questions yet. Shoppers ask from the product page — their questions land here.</td></tr>`}</tbody>
+    </table>
+  </div>
+  <p style="margin-top:14px;font-size:12.5px;color:var(--ink-soft);">Whatever you post here appears straight away under “Questions &amp; Answers” on that product page.</p>`;
+}
+
+async function answerQuestion(qid){
+  const el = document.getElementById('qa-answer-' + qid);
+  const answer = el ? el.value.trim() : '';
+  if(!answer){ toast('Type your reply first'); return; }
+  const q = (DB.questions||[]).find(x => x.id === qid);
+  if(!q){ toast('That question no longer exists'); return; }
+
+  q.answer = answer;
+  q.answeredAt = Date.now();
+  try{
+    const remote = await apiRequest('answer_question', {method:'POST', body:JSON.stringify({id:qid, answer})});
+    if(remote && !remote.ok && remote.message){ toast(remote.message); return; }
+  }catch(e){ console.warn('Question API unavailable — reply kept in this browser only', e); }
+  await saveDB();
+  toast('Reply posted ✓');
+  renderAdmin('questions');
+}
+
+async function clearAnswer(qid){
+  const q = (DB.questions||[]).find(x => x.id === qid);
+  if(!q) return;
+  q.answer = null; q.answeredAt = null;
+  try{ await apiRequest('answer_question', {method:'POST', body:JSON.stringify({id:qid, answer:''})}); }
+  catch(e){ console.warn('Question API unavailable', e); }
+  await saveDB();
+  toast('Reply removed');
+  renderAdmin('questions');
 }
 
 /* ============================================================
@@ -3559,6 +4219,285 @@ function initSantaFloat(){
   document.body.appendChild(el);
 }
 
+/* ---------------- EXAMPLE DATA (first run of a fresh store) ----------------
+   An empty store makes every screen look broken, so a brand-new install gets a
+   small, self-consistent example set: customer accounts, their order history,
+   their saved bags and wishlists, the payment recorded on each order, and a
+   completed review for every delivered order.
+
+   Every line is built from products that really exist in the catalogue, at
+   their real prices and with their real photos, so no example can drift away
+   from the catalogue. It runs once per browser — an order book that already
+   has content is never touched, and an admin's wipe stays wiped. */
+const EXAMPLE_DAY = 86400000;
+const EXAMPLE_SEED_VERSION = 3;
+
+function seedExampleData(){
+  /* Flag history: '1' = the original seven-example build, '2' = orders, reviews
+     and wishlists, '3' = questions and return requests. Every section below is
+     idempotent — an order is written only when its id is missing, a review only
+     when that account has not written it, a question only when its id is missing,
+     a return only on an order that has none — so a higher version tops a store up
+     without ever rebuilding or duplicating it. */
+  let flag = null;
+  try{ flag = localStorage.getItem('noframe-example-seeded'); }catch(e){}
+  DB.orders = DB.orders || [];
+  DB.users  = DB.users  || [];
+  const done = ()=>{ try{ localStorage.setItem('noframe-example-seeded', String(EXAMPLE_SEED_VERSION)); }catch(e){} };
+  /* A store that already holds orders is settled: a seeded one needs nothing
+     more (deletions stick), and one that was never seeded is a live store that
+     example data must never be injected into. */
+  if(DB.orders.length){
+    if(flag !== String(EXAMPLE_SEED_VERSION)) done();
+    return false;
+  }
+  /* The order book is empty. /load hands the full order book only to
+     administrators, so guests and customers see this on every load, and a fresh
+     MySQL database looks exactly the same — either way the examples are applied
+     rather than leaving an empty dashboard. Only individual deletions stick. */
+
+  const now = Date.now();
+
+  /* --- 1. customer accounts (they can really be signed into) --- */
+  const people = [
+    {id:'U2', name:'Kasun Perera',  email:'kasun@example.com',  password:'Kasun@1234',  phone:'+94 77 214 8890',
+     address:'42/A, Galle Road, Dehiwala', city:'Dehiwala', accountStatus:'Active Member', promo:true},
+    {id:'U3', name:'Dilani Fernando', email:'dilani@example.com', password:'Dilani@1234', phone:'+94 76 553 1120',
+     address:'15/2, Temple Road, Kandy', city:'Kandy', accountStatus:'Active Member', promo:false},
+    {id:'U4', name:'Sanduni Silva',  email:'sanduni@example.com', password:'Sanduni@1234', phone:'+94 71 408 7733',
+     address:'7, Lake View Road, Galle', city:'Galle', accountStatus:'Active Member', promo:false}
+  ];
+  people.forEach(p=>{
+    if(DB.users.some(u => u.id === p.id || u.email === p.email)) return;
+    DB.users.push({ ...p, role:'customer', avatar:'/assets/u1.svg',
+      shippingAddress:p.address, billingAddress:p.address,
+      createdAt: now - 45*EXAMPLE_DAY });
+  });
+  /* the built-in demo customer needs a shipping address too. /load withholds
+     the customer directory from non-administrators, so the demo account is
+     rebuilt here when the store did not hand it back. */
+  const demo = DB.users.find(u => u && u.id === 'U1') || {
+    id:'U1', name:'Demo Customer', email:'demo@noframe.com', phone:'+94 77 123 4567',
+    address:'128 Galle Road, Colombo 03', city:'Colombo 03', role:'customer'
+  };
+  if(demo){
+    if(!demo.address) demo.address = '128 Galle Road, Colombo 03';
+    if(!demo.city) demo.city = 'Colombo 03';
+  }
+
+  const person = id => DB.users.find(u => u.id === id) || demo;
+
+  /* --- 2. order lines from the live catalogue --- */
+  const pick = (cat, i) => {
+    const list = DB.products.filter(p => p.category === cat);
+    return list.length ? list[i % list.length] : null;
+  };
+  const line = (p, qty, sizeIdx) => {
+    if(!p) return null;
+    const sizes = (p.sizes && p.sizes.length) ? p.sizes : ['One Size'];
+    const colors = (p.colors && p.colors.length) ? p.colors : ['black'];
+    return { productId:p.id, title:p.title, color:colors[0],
+      size:sizes[Math.min(sizeIdx||0, sizes.length-1)], qty,
+      price: Number(p.discountPrice || p.price),
+      image: (p.images && p.images[0]) || '' };
+  };
+
+  const specs = [
+    {id:'NF900001', user:'U1', days:16, status:'Delivered',      method:'payhere', card:'Visa •••• 4242',
+     lines:[['frocks-women',8,1,1], ['caps-unisex',1,1,0]],
+     reviews:[{item:0, rating:5, comment:'Held its shape after three washes and the tiering falls exactly as it does in the photo. I am 5\'4" and the length was perfect.'}]},
+    {id:'NF900002', user:'U1', days:3,  status:'Dispatched',     method:'payhere', card:'Visa •••• 4242',
+     lines:[['womens-shoes',2,1,0]]},
+    {id:'NF900003', user:'U2', days:11, status:'Delivered',      method:'payhere', card:'Mastercard •••• 5309',
+     lines:[['mens-shoes',0,1,1], ['mens-tshirts',2,2,2]],
+     reviews:[{item:0, rating:4, comment:'Comfortable straight out of the box — no breaking-in needed. Slightly narrower than my usual size, so order half a size up.'},
+              {item:1, rating:5, comment:'Proper weight to the cotton and the neck has not stretched after repeated washing.'}]},
+    {id:'NF900004', user:'U2', days:1,  status:'Confirmed',      method:'cod',
+     lines:[['mens-trousers',0,1,1]]},
+    {id:'NF900005', user:'U3', days:7,  status:'Delivered',      method:'payhere', card:'Visa •••• 1028',
+     lines:[['womens-others',1,1,0], ['frocks-women',4,1,1]],
+     reviews:[{item:0, rating:5, comment:'Genuinely looks like a designer piece. It swallows a phone, wallet and a small umbrella without losing its shape.'},
+              {item:1, rating:4, comment:'Lovely drape and the polka dots do not show through. Ran slightly loose at the shoulders — I had it taken in.'}]},
+    {id:'NF900006', user:'U3', days:0,  status:'Payment Pending', method:'payhere', card:'Visa •••• 1028',
+     lines:[['womens-croptops',0,1,1]]},
+    {id:'NF900007', user:'U4', days:5,  status:'Delivered',      method:'cod',
+     lines:[['children',1,2,0], ['gift-cards',1,1,0]],
+     reviews:[{item:0, rating:5, comment:'Survived a full day at the park and a normal wash cycle — the colour is still sharp. True to size.'}]},
+    /* --- the second half of the order book --- */
+    {id:'NF900008', user:'U2', days:20, status:'Delivered',      method:'payhere', card:'Mastercard •••• 5309',
+     lines:[['mens-shirts',1,1,1], ['mens-others',0,1,0]],
+     reviews:[{item:0, rating:4, comment:'Pressed beautifully and the collar kept its shape through a full working day. Sleeve length ran a touch long.'},
+              {item:1, rating:5, comment:'Keeps perfect time and the strap adjusted to my wrist with no tools. Looks far more expensive than it costs.'}]},
+    {id:'NF900009', user:'U3', days:13, status:'Delivered',      method:'payhere', card:'Visa •••• 1028',
+     lines:[['womens-blouses',1,1,1], ['womens-trousers',2,1,0]],
+     reviews:[{item:0, rating:5, comment:'Opaque rather than sheer, which was my main worry. Pairs with everything I already own.'}]},
+    {id:'NF900010', user:'U3', days:4,  status:'Processing',     method:'payhere', card:'Visa •••• 1028',
+     lines:[['womens-shoes',4,1,1]]},
+    {id:'NF900011', user:'U1', days:9,  status:'Delivered',      method:'cod',
+     lines:[['womens-blouses',0,1,1], ['womens-croptops',2,1,0]],
+     reviews:[{item:0, rating:5, comment:'Elegant without being formal — worn it to dinner and straight to the office after. Neatly packed, too.'}]},
+    {id:'NF900012', user:'U4', days:2,  status:'Confirmed',      method:'cod',
+     lines:[['caps-unisex',2,1,0], ['children',5,1,1]]}
+  ];
+
+  /* Placeholder rows from older builds pointed at products that no longer
+     exist. Drop them so every example review resolves to a real product. */
+  DB.reviews = (DB.reviews || []).filter(r => r && findProduct(r.productId));
+
+  specs.forEach(spec=>{
+    const items = spec.lines.map(([cat,i,qty,s]) => line(pick(cat,i), qty, s)).filter(Boolean);
+    if(!items.length) return;
+    const u = person(spec.user);
+    if(!u) return;
+    const sub = items.reduce((s,i) => s + i.price*i.qty, 0);
+    const delivery = sub >= 5000 ? 0 : 1500;
+    const createdAt = now - spec.days*EXAMPLE_DAY - 5*3600000;
+    const payment = spec.method === 'cod'
+      ? {method:'Cash on Delivery', card:null, transactionId:null, paidAt:null}
+      : {method:'PayHere', card:spec.card, transactionId:'PH-' + spec.id,
+         paidAt: spec.status === 'Payment Pending' ? null : createdAt};
+    /* Only orders that are not in the book yet are written — that is what
+       extends a v1 example store without ever duplicating an order. */
+    if(!DB.orders.some(o => o.id === spec.id)){
+      DB.orders.push({
+        id: spec.id, userId: u.id, items,
+        subtotal: sub, delivery, total: sub + delivery,
+        status: spec.status,
+        paymentMethod: spec.method === 'cod' ? 'cash-on-delivery' : 'payhere',
+        payment,
+        shipping: { name:u.name, email:u.email, phone:u.phone || '',
+                    address:u.address || '', city:u.city || '', zip:'00000' },
+        createdAt
+      });
+    }
+
+    /* COMPLETED REVIEWS — only on delivered orders and only from the account
+       that bought the item, so the "Verified purchase" badge is truthful and
+       the feedback box stays unlocked for that customer. Idempotent: one
+       review per account per product, so re-running never doubles them. */
+    if(spec.status === 'Delivered' && Array.isArray(spec.reviews)){
+      spec.reviews.forEach(rv=>{
+        const target = items[Math.min(rv.item || 0, items.length - 1)];
+        if(!target || !rv.comment) return;
+        if(DB.reviews.some(r => r.productId === target.productId && r.userId === u.id)) return;
+        DB.reviews.push({
+          productId: target.productId,
+          userId: u.id,
+          userName: u.name,
+          rating: Number(rv.rating) || 5,
+          comment: rv.comment,
+          verified: true,
+          createdAt: Math.min(now - 3600000, createdAt + 2*EXAMPLE_DAY)
+        });
+        const prod = findProduct(target.productId);
+        if(prod) prod.reviewsCount = Number(prod.reviewsCount || 0) + 1;   /* same as a live submission */
+      });
+    }
+  });
+
+  /* --- 3. example bags: each account opens with something already in it --- */
+  const bags = {
+    U2: [['mens-shoes',0,1,1], ['caps-unisex',3,1,0]],
+    U3: [['frocks-women',4,1,1]],
+    U4: [['womens-others',1,1,0], ['gift-cards',0,1,0]]
+  };
+  Object.keys(bags).forEach(uid=>{
+    let existing = null;
+    try{ existing = localStorage.getItem(bagKey('cart', uid)); }catch(e){}
+    if(existing) return;                                  /* never overwrite a real bag */
+    const items = bags[uid].map(([cat,i,qty,s]) => line(pick(cat,i), qty, s)).filter(Boolean);
+    if(items.length) writeBag('cart', uid, items);
+  });
+
+  /* --- 4. example wishlists: saved-for-later items, one key per account --- */
+  const wishes = {
+    U1: [['frocks-women',11,0], ['caps-unisex',4,0],   ['womens-shoes',3,0]],
+    U2: [['mens-shoes',4,0],    ['mens-others',5,0],   ['mens-trousers',4,0]],
+    U3: [['frocks-women',10,0], ['womens-others',4,0], ['womens-croptops',4,0]],
+    U4: [['children',7,0],      ['gift-cards',3,0],    ['caps-unisex',6,0]]
+  };
+  Object.keys(wishes).forEach(uid=>{
+    let existing = null;
+    try{ existing = localStorage.getItem(bagKey('wishlist', uid)); }catch(e){}
+    if(existing) return;                                  /* never overwrite a real wishlist */
+    const ids = wishes[uid].map(([cat,i]) => { const p = pick(cat,i); return p ? p.id : null; }).filter(Boolean);
+    if(ids.length) writeBag('wishlist', uid, ids);
+  });
+
+  /* --- 5. example product questions: two waiting for a reply and one already
+       answered, so both states show on the product page and in Admin → Questions --- */
+  const qSpecs = [
+    {id:'QEX1', cat:'frocks-women', i:8, user:'U3', days:6,
+     q:"I'm 5'6\" — does this fall above or below the knee, and can it be taken in at the waist if it sits loose?"},
+    {id:'QEX2', cat:'children', i:1, user:'U4', days:3,
+     q:'Is this pure cotton, and does it shrink after a hot wash? I want to order two.'},
+    {id:'QEX3', cat:'mens-shoes', i:0, user:'U2', days:9,
+     q:'Is the leather genuine, and does it run true to size?',
+     a:'Full-grain leather on a rubber sole, and it runs true to size — order your usual size. If you are between sizes take the smaller one, as the leather gives a little with wear.',
+     answeredDays:8.7}
+  ];
+  DB.questions = DB.questions || [];
+  qSpecs.forEach(s=>{
+    if(DB.questions.some(q => q && q.id === s.id)) return;
+    const p = pick(s.cat, s.i), u = person(s.user);
+    if(!p || !u) return;
+    DB.questions.push({
+      id:s.id, productId:p.id, userId:u.id, userName:u.name,
+      question:s.q, answer:s.a || null,
+      answeredAt: s.a ? now - s.answeredDays*EXAMPLE_DAY : null,
+      createdAt: now - s.days*EXAMPLE_DAY
+    });
+  });
+
+  /* --- 6. example return requests, one in every state an admin can act on.
+       They sit on orders that carry no review — somebody who wrote a glowing
+       review does not also send the item back — and only on orders that allow a
+       return, exactly as if the customer had raised them from My Orders. --- */
+  const retSpecs = [
+    {id:'NF900002', status:'Requested', reason:'Changed my mind',
+     note:'Please cancel this before it ships — I chose the wrong size.', days:2},
+    {id:'NF900004', status:'Approved', reason:'Size does not fit',
+     note:'The waist runs a full size smaller than the size chart says.', days:6, decided:5.6},
+    {id:'NF900012', status:'Refunded', reason:'Changed my mind',
+     note:'No longer needed — thank you for turning it around so quickly.', days:11, decided:10.6, refunded:10}
+  ];
+  retSpecs.forEach(r=>{
+    const o = DB.orders.find(x => x && x.id === r.id);
+    if(!o || o.returnRequest) return;                       /* never overwrite a real decision */
+    if(!RETURNABLE_STATUSES.includes(o.status)) return;
+    const owner = DB.users.find(u => u && u.id === o.userId);
+    const rr = {
+      status:r.status, reason:r.reason, note:r.note,
+      by: (owner && owner.name) || (o.shipping && o.shipping.name) || 'Customer',
+      at: now - r.days*EXAMPLE_DAY
+    };
+    if(r.decided)  rr.decidedAt  = now - r.decided*EXAMPLE_DAY;
+    if(r.refunded) rr.refundedAt = now - r.refunded*EXAMPLE_DAY;
+    o.returnRequest = rr;
+    if(r.status === 'Approved') o.status = 'Returned';
+    if(r.status === 'Refunded') o.status = 'Refunded';
+  });
+
+  done();
+  /* Keep the browser's own copy in step, so a store whose server copy is still
+     empty (API just switched on) restores the examples on the next load too. */
+  try{ localStorage.setItem('noframe-db-fallback', JSON.stringify(DB)); }catch(e){}
+  console.info('Example data added: ' + DB.orders.length + ' orders, ' + DB.reviews.length +
+    ' reviews, ' + (DB.questions||[]).length + ' questions, ' +
+    DB.orders.filter(o => o && o.returnRequest).length + ' returns and ' +
+    Object.keys(wishes).length + ' wishlists across ' + (people.length+1) + ' accounts');
+  if(SESSION.user && SESSION.user.role === 'admin') saveDB();
+  return true;
+}
+
+function paymentLabel(o){
+  const p = o.payment || {};
+  const method = p.method || (o.paymentMethod === 'cash-on-delivery' ? 'Cash on Delivery' : 'PayHere');
+  const tail = p.card ? ' · ' + p.card : '';
+  if(o.status === 'Payment Pending') return method + tail + ' · awaiting payment';
+  return method + tail;
+}
+
 /* ---------------- INIT ---------------- */
 (async function init(){
   await loadStorage();
@@ -3567,6 +4506,8 @@ function initSantaFloat(){
   ensureCatalogDelta();
   ensureSeedAdmins();
   enforceSaleQuota();
+  seedExampleData();
+  await pruneDanglingBagItems();
   renderFooter();
   renderRoute();
   /* Festive additions — run after first render */

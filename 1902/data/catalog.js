@@ -6,7 +6,7 @@
 // explicit id, so the catalogue merges into any browser or MySQL copy
 // without duplicates. Sale rule: 1 in every 5 products per sub-category.
 
-const CATALOG_VERSION = '2026-10-23-rebuild-2';
+const CATALOG_VERSION = '2026-10-31-giftcard-cover-2';
 
 const STORE_CATEGORIES = [
   {id:'caps-unisex',name:'Caps & Headwear',coverImage:'../images/caps-unisex/cap1.jpg'},
@@ -25,7 +25,7 @@ const STORE_CATEGORIES = [
   {id:'children',name:'Children\'s Fashion',coverImage:'../images/children/04.jpg'},
   {id:'womens-underwear',name:'Women\'s Innerwear',coverImage:'../images/womens-innerware/w7.webp'},
   {id:'mens-underwear',name:'Men\'s Innerwear',coverImage:'../images/mens-innerware/q1.webp'},
-  {id:'gift-cards',name:'Gift Cards',coverImage:'../assets/gift-card.svg'}
+  {id:'gift-cards',name:'Gift Cards',coverImage:'../images/gift-card-cover.jpg'}
 ];
 
 const STORE_PRODUCTS = {
@@ -275,11 +275,11 @@ const STORE_PRODUCTS = {
     {id:'nf-muw-tommy-3pk', title:'Tommy Hilfiger 3-Pack Boxer Briefs (White)', price:6900, stock:13, colors:['white', 'grey', 'black'], sizes:['S', 'M', 'L', 'XL'], tags:['featured', 'bestseller'], description:'Three Tommy Hilfiger boxer briefs with black, grey and white logo waistbands in a soft cotton-modal knit.', images:['../images/mens-innerware/tommy-boxer-briefs-3pack.jpg']}
   ],
   'gift-cards': [
-    {id:'gc-1000', title:'NoFrame Gift Card — Rs. 1,000', price:1000, stock:99, tags:['featured'], colors:['beige'], sizes:['e-Gift Card'], description:'A digital NoFrame gift card worth Rs. 1,000. Delivered by email with a personalised message, valid for 12 months on every category.', images:['../assets/gift-card.svg']},
-    {id:'gc-2500', title:'NoFrame Gift Card — Rs. 2,500', price:2500, stock:99, tags:['featured'], colors:['beige'], sizes:['e-Gift Card'], description:'A digital NoFrame gift card worth Rs. 2,500 — enough for frocks, shirts or leather accessories. Delivered by email, valid for 12 months.', images:['../assets/gift-card.svg']},
-    {id:'gc-5000', title:'NoFrame Gift Card — Rs. 5,000', price:5000, stock:99, tags:['featured'], colors:['beige'], sizes:['e-Gift Card'], description:'A digital NoFrame gift card worth Rs. 5,000. The most popular amount for birthdays and festive gifting. Delivered by email, valid for 12 months.', images:['../assets/gift-card.svg']},
-    {id:'gc-10000', title:'NoFrame Gift Card — Rs. 10,000', price:10000, stock:99, tags:['featured'], colors:['beige'], sizes:['e-Gift Card'], description:'A digital NoFrame gift card worth Rs. 10,000 for the big occasions. Delivered by email with a personalised message, valid for 12 months.', images:['../assets/gift-card.svg']},
-    {id:'gc-25000', title:'NoFrame Gift Card — Rs. 25,000', price:25000, stock:99, tags:['featured'], colors:['beige'], sizes:['e-Gift Card'], description:'A digital NoFrame gift card worth Rs. 25,000 — the ultimate NoFrame gift for weddings, anniversaries and festive celebrations. Delivered by email, valid for 12 months.', images:['../assets/gift-card.svg']}
+    {id:'gc-1000', title:'NoFrame Gift Card — Rs. 1,000', price:1000, stock:99, tags:['featured'], colors:['beige'], sizes:['e-Gift Card'], description:'A digital NoFrame gift card worth Rs. 1,000. Delivered by email with a personalised message, valid for 12 months on every category.', images:['../images/gift-card-cover.jpg', '../assets/gift-card.svg']},
+    {id:'gc-2500', title:'NoFrame Gift Card — Rs. 2,500', price:2500, stock:99, tags:['featured'], colors:['beige'], sizes:['e-Gift Card'], description:'A digital NoFrame gift card worth Rs. 2,500 — enough for frocks, shirts or leather accessories. Delivered by email, valid for 12 months.', images:['../images/gift-card-cover.jpg', '../assets/gift-card.svg']},
+    {id:'gc-5000', title:'NoFrame Gift Card — Rs. 5,000', price:5000, stock:99, tags:['featured'], colors:['beige'], sizes:['e-Gift Card'], description:'A digital NoFrame gift card worth Rs. 5,000. The most popular amount for birthdays and festive gifting. Delivered by email, valid for 12 months.', images:['../images/gift-card-cover.jpg', '../assets/gift-card.svg']},
+    {id:'gc-10000', title:'NoFrame Gift Card — Rs. 10,000', price:10000, stock:99, tags:['featured'], colors:['beige'], sizes:['e-Gift Card'], description:'A digital NoFrame gift card worth Rs. 10,000 for the big occasions. Delivered by email with a personalised message, valid for 12 months.', images:['../images/gift-card-cover.jpg', '../assets/gift-card.svg']},
+    {id:'gc-25000', title:'NoFrame Gift Card — Rs. 25,000', price:25000, stock:99, tags:['featured'], colors:['beige'], sizes:['e-Gift Card'], description:'A digital NoFrame gift card worth Rs. 25,000 — the ultimate NoFrame gift for weddings, anniversaries and festive celebrations. Delivered by email, valid for 12 months.', images:['../images/gift-card-cover.jpg', '../assets/gift-card.svg']}
   ],
 };
 

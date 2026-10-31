@@ -81,22 +81,19 @@ Seeded for Phase 3 (Testing & Deployment) — the Admin Dashboard account:
 
 ## First-order discount PIN
 
-Every first-time sign-up (email **or** Google) gets a PIN such as
+Every first-time sign-up gets a PIN such as
 `NF-PQ9D-UTUA`, shown on the thank-you screen and stored on the customer's
 profile page (and in the `users.discount_pin` column when that column exists).
 
-## Google sign-up
+## Sign-up method
 
-Google sign-up is wired up but disabled until you add an OAuth client ID:
+Accounts are created with an **email address and password only**. Google
+sign-in was removed from the storefront (it showed an error until an OAuth
+client ID was configured), so the Login and Sign Up tabs contain no Google
+button and `api/api.php` has no `google_auth` endpoint.
 
-1. Google Cloud Console → Credentials → OAuth 2.0 Client ID → **Web application**
-2. Add your origin (e.g. `http://localhost/`) to *Authorised JavaScript origins*
-3. Paste the client ID in **both** `js/app.js` (`GOOGLE_CLIENT_ID`) and
-   `api/config.php` (`GOOGLE_CLIENT_ID`)
-
-The server verifies the ID token against Google's `tokeninfo` endpoint
-(signature, issuer, audience, expiry) before creating or opening an account;
-new Google accounts are created with role `customer`.
+Signing out clears the session and the login form never keeps a previous
+account's email or password.
 
 ## LKR currency
 

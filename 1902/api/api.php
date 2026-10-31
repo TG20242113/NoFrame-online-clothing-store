@@ -80,6 +80,84 @@ function hasColumn(PDO $pdo, string $table, string $column): bool {
     return $cache[$key];
 }
 
+/* --- PRODUCT QUESTIONS (Q&A) -------------------------------------------
+   One small table, created on demand so an existing XAMPP install picks the
+   feature up without a manual migration. */
+function ensureQuestionsTable(PDO $pdo): void {
+    static $done = false;
+    if ($done) return;
+    $pdo->exec("CREATE TABLE IF NOT EXISTS product_questions (
+        id VARCHAR(64) PRIMARY KEY,
+        product_id VARCHAR(80) NOT NULL,
+        user_id VARCHAR(50),
+        user_name VARCHAR(150) NOT NULL,
+        question TEXT NOT NULL,
+        answer TEXT NULL,
+        answered_at BIGINT NULL,
+        created_at BIGINT NOT NULL,
+        KEY idx_pq_product (product_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    $done = true;
+}
+
+function questionsOut(PDO $pdo): array {
+    ensureQuestionsTable($pdo);
+    $rows = [];
+    foreach ($pdo->query("SELECT id, product_id, user_id, user_name, question, answer, answered_at, created_at FROM product_questions ORDER BY created_at DESC") as $r) {
+        $rows[] = ['id'=>$r['id'], 'productId'=>$r['product_id'], 'userId'=>$r['user_id'],
+                   'userName'=>$r['user_name'], 'question'=>$r['question'],
+                   'answer'=>$r['answer'], 'answeredAt'=>$r['answered_at'] ? (int)$r['answered_at'] : null,
+                   'createdAt'=>(int)$r['created_at']];
+    }
+    return $rows;
+}
+
+/* --- ORDER RETURNS ----------------------------------------------------
+   A customer who bought something can ask for a return from their own order
+   history. The request (status, reason, note, timestamps) rides in an optional
+   TEXT column that is added on demand, so an existing XAMPP install picks the
+   feature up without a manual migration — the same pattern as discount_pin
+   and product_questions. */
+function returnColumnReady(PDO $pdo): bool {
+    static $ready = null;
+    if ($ready !== null) return $ready;
+    if (hasColumn($pdo, 'orders', 'return_request')) { $ready = true; return $ready; }
+    try {
+        $pdo->exec("ALTER TABLE orders ADD COLUMN return_request TEXT NULL AFTER status");
+        $ready = true;
+    } catch (Throwable $e) {
+        $ready = false;
+    }
+    return $ready;
+}
+
+function returnOut($value): ?array {
+    if ($value === null || $value === '') return null;
+    $x = json_decode($value, true);
+    return is_array($x) ? $x : null;
+}
+
+function paymentColumnReady(PDO $pdo): bool {
+    /* How the order was paid (method, card, transaction id, paid-at). Stored in
+       the same on-demand way as return_request: without it every order reads
+       back as "PayHere" and cash-on-delivery orders lose their real state. */
+    if (hasColumn($pdo, 'orders', 'payment')) return true;
+    try {
+        $pdo->exec("ALTER TABLE orders ADD COLUMN payment TEXT NULL");
+        return true;
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+function orderOut(array $r, bool $withReturn, bool $withPay=false): array {
+    return ['id'=>$r['id'], 'userId'=>$r['user_id'], 'items'=>arr($r['items']),
+        'subtotal'=>(float)$r['subtotal'], 'delivery'=>(float)$r['delivery'], 'total'=>(float)$r['total'],
+        'status'=>$r['status'], 'shipping'=>arr($r['shipping']), 'createdAt'=>(int)$r['created_at'],
+        'payment'=>$withPay && !empty($r['payment']) ? arr($r['payment']) : null,
+        'returnRequest'=>$withReturn ? returnOut($r['return_request'] ?? null) : null];
+}
+
 function validatePasswordComplexity(string $pw): array {
     if (strlen($pw) < 8) {
         return ['valid' => false, 'message' => 'Password must be at least 8 characters long.'];
@@ -285,6 +363,50 @@ try {
         ]);
     }
 
+    /* --- OPTIONAL PROFILE PHOTO ---
+       The browser resizes the picture and posts it as a base64 image; we save
+       it as a file under assets/avatars/ (the DB column only holds the short
+       URL) and store that URL on the caller's own profile row. */
+    if ($action === 'upload_avatar') {
+        $authUser = requireAuth($pdo);
+        $data = bodyJson();
+        $dataUrl = trim($data['dataUrl'] ?? '');
+
+        if (!preg_match('#^data:image/(jpeg|jpg|png|webp);base64,#i', $dataUrl)) {
+            out(['ok'=>false,'message'=>'Send the photo as a base64 image data URL'], 400);
+        }
+        $comma = strpos($dataUrl, ',');
+        $bin = base64_decode(substr($dataUrl, $comma + 1), true);
+        if ($bin === false || strlen($bin) < 100) {
+            out(['ok'=>false,'message'=>'That photo could not be read'], 400);
+        }
+        if (strlen($bin) > 300000) {
+            out(['ok'=>false,'message'=>'Photo is too large — maximum 300 KB'], 413);
+        }
+
+        $dir = dirname(__DIR__) . '/assets/avatars';
+        if (!is_dir($dir) && !@mkdir($dir, 0775, true)) {
+            out(['ok'=>false,'message'=>'Could not create assets/avatars — check folder permissions'], 500);
+        }
+        $safeId = preg_replace('/[^A-Za-z0-9_-]/', '', (string)$authUser['id']);
+        $name = 'avatar-' . ($safeId !== '' ? $safeId : 'user') . '-' . time() . '.jpg';
+        if (@file_put_contents($dir . '/' . $name, $bin) === false) {
+            out(['ok'=>false,'message'=>'Could not save the photo — check folder permissions'], 500);
+        }
+        $url = '../assets/avatars/' . $name;
+
+        $stmt = $pdo->prepare("UPDATE user_profiles SET avatar = ? WHERE user_id = ?");
+        $stmt->execute([$url, $authUser['id']]);
+        if ($stmt->rowCount() === 0) {
+            $stmt = $pdo->prepare("INSERT INTO user_profiles(user_id, phone, shipping_address, billing_address, avatar, account_status)
+                                   VALUES (?, ?, '', '', ?, 'Active Member')
+                                   ON DUPLICATE KEY UPDATE avatar = VALUES(avatar)");
+            $stmt->execute([$authUser['id'], $authUser['phone'] ?? '', $url]);
+        }
+
+        out(['ok'=>true, 'url'=>$url]);
+    }
+
     if ($action === 'change_password' || $action === 'change-password') {
         $authUser = getAuthenticatedUser($pdo);
         if (!$authUser) {
@@ -365,21 +487,21 @@ try {
                 ];
             }
 
-            foreach ($pdo->query("SELECT id,user_id,items,subtotal,delivery,total,status,shipping,created_at FROM orders ORDER BY created_at DESC") as $r) {
-                $orders[] = ['id'=>$r['id'],'userId'=>$r['user_id'],'items'=>arr($r['items']),
-                    'subtotal'=>(float)$r['subtotal'],'delivery'=>(float)$r['delivery'],'total'=>(float)$r['total'],
-                    'status'=>$r['status'],'shipping'=>arr($r['shipping']),'createdAt'=>(int)$r['created_at']];
-            }
+            $withReturn = returnColumnReady($pdo);
+            $withPay = paymentColumnReady($pdo);
+            $sel = "SELECT id,user_id,items,subtotal,delivery,total,status,shipping,created_at"
+                 . ($withReturn ? ",return_request" : "") . ($withPay ? ",payment" : "")
+                 . " FROM orders ORDER BY created_at DESC";
+            foreach ($pdo->query($sel) as $r) { $orders[] = orderOut($r, $withReturn, $withPay); }
         } elseif ($authUser) {
             /* Customer view: ONLY this account's own order history. */
-            $stmt = $pdo->prepare("SELECT id,user_id,items,subtotal,delivery,total,status,shipping,created_at
-                                   FROM orders WHERE user_id = ? ORDER BY created_at DESC");
+            $withReturn = returnColumnReady($pdo);
+            $withPay = paymentColumnReady($pdo);
+            $stmt = $pdo->prepare("SELECT id,user_id,items,subtotal,delivery,total,status,shipping,created_at"
+                . ($withReturn ? ",return_request" : "") . ($withPay ? ",payment" : "")
+                . " FROM orders WHERE user_id = ? ORDER BY created_at DESC");
             $stmt->execute([$authUser['id']]);
-            foreach ($stmt as $r) {
-                $orders[] = ['id'=>$r['id'],'userId'=>$r['user_id'],'items'=>arr($r['items']),
-                    'subtotal'=>(float)$r['subtotal'],'delivery'=>(float)$r['delivery'],'total'=>(float)$r['total'],
-                    'status'=>$r['status'],'shipping'=>arr($r['shipping']),'createdAt'=>(int)$r['created_at']];
-            }
+            foreach ($stmt as $r) { $orders[] = orderOut($r, $withReturn, $withPay); }
         }
 
         $reviews = [];
@@ -389,7 +511,10 @@ try {
                 'approved'=>(bool)$r['approved'],'createdAt'=>(int)$r['created_at']];
         }
 
-        out(['ok'=>true,'data'=>['categories'=>$cats,'products'=>$products,'orders'=>$orders,'reviews'=>$reviews,'users'=>$users]]);
+        $questions = [];
+        try { $questions = questionsOut($pdo); } catch (Throwable $e) { /* table/permission not ready */ }
+
+        out(['ok'=>true,'data'=>['categories'=>$cats,'products'=>$products,'orders'=>$orders,'reviews'=>$reviews,'users'=>$users,'questions'=>$questions]]);
     }
 
     if ($action === 'prices') {
@@ -406,9 +531,18 @@ try {
         /* SERVER-SIDE PROTECTION: only an administrator may rewrite the store
            (catalog, inventory, users, orders). Customers get a 403. */
         requireAdmin($pdo);
+        /* Schema check first: ALTER TABLE would otherwise implicitly commit the
+           transaction that the rewrite below opens. */
+        $withReturn = returnColumnReady($pdo);
+        $withPay = paymentColumnReady($pdo);
+        /* Q&A is read back by /load, so it has to be written here too — without
+           this every question (example or real) disappeared on the next load. */
+        $withQuestions = false;
+        try { ensureQuestionsTable($pdo); $withQuestions = true; }
+        catch (Throwable $e) { /* questions table unavailable in this install */ }
 
         $data = bodyJson();
-        foreach (['categories','products','users','orders','reviews'] as $key) {
+        foreach (['categories','products','users','orders','reviews','questions'] as $key) {
             if (!isset($data[$key]) || !is_array($data[$key])) $data[$key] = [];
         }
 
@@ -460,11 +594,24 @@ try {
                 json_encode($p['tags']??[],JSON_UNESCAPED_UNICODE),$p['description']??'']);
         }
 
-        $q = $pdo->prepare("INSERT INTO orders(id,user_id,items,subtotal,delivery,total,status,shipping,created_at) VALUES(?,?,?,?,?,?,?,?,?)");
+        $retCols = $withReturn ? ",return_request" : "";
+        $retVals = $withReturn ? ",?" : "";
+        $payCols = $withPay ? ",payment" : "";
+        $payVals = $withPay ? ",?" : "";
+        $q = $pdo->prepare("INSERT INTO orders(id,user_id,items,subtotal,delivery,total,status,shipping,created_at{$retCols}{$payCols}) VALUES(?,?,?,?,?,?,?,?,?{$retVals}{$payVals})");
         foreach ($data['orders'] as $o) {
-            $q->execute([$o['id'],$o['userId']??null,json_encode($o['items']??[],JSON_UNESCAPED_UNICODE),
+            $args = [$o['id'],$o['userId']??null,json_encode($o['items']??[],JSON_UNESCAPED_UNICODE),
                 $o['subtotal']??0,$o['delivery']??0,$o['total']??0,$o['status']??'Pending',
-                json_encode($o['shipping']??[],JSON_UNESCAPED_UNICODE),$o['createdAt']??round(microtime(true)*1000)]);
+                json_encode($o['shipping']??[],JSON_UNESCAPED_UNICODE),$o['createdAt']??round(microtime(true)*1000)];
+            if ($withReturn) {
+                $rr = isset($o['returnRequest']) && is_array($o['returnRequest']) ? $o['returnRequest'] : null;
+                $args[] = $rr === null ? null : json_encode($rr, JSON_UNESCAPED_UNICODE);
+            }
+            if ($withPay) {
+                $pay = isset($o['payment']) && is_array($o['payment']) && $o['payment'] ? $o['payment'] : null;
+                $args[] = $pay === null ? null : json_encode($pay, JSON_UNESCAPED_UNICODE);
+            }
+            $q->execute($args);
         }
 
         $q = $pdo->prepare("INSERT INTO reviews(product_id,user_id,user_name,rating,comment,approved,created_at) VALUES(?,?,?,?,?,?,?)");
@@ -473,8 +620,142 @@ try {
                 $r['comment']??'',isset($r['approved'])&&$r['approved']===false?0:1,$r['createdAt']??round(microtime(true)*1000)]);
         }
 
+        if ($withQuestions) {
+            $pdo->exec("DELETE FROM product_questions");
+            $q = $pdo->prepare("INSERT INTO product_questions(id,product_id,user_id,user_name,question,answer,answered_at,created_at) VALUES(?,?,?,?,?,?,?,?)");
+            foreach ($data['questions'] as $x) {
+                if (empty($x['id']) || empty($x['productId'])) continue;
+                $q->execute([$x['id'], $x['productId'], $x['userId'] ?? null, $x['userName'] ?? '',
+                    (string)($x['question'] ?? ''),
+                    isset($x['answer']) && $x['answer'] !== '' && $x['answer'] !== null ? (string)$x['answer'] : null,
+                    !empty($x['answeredAt']) ? (int)$x['answeredAt'] : null,
+                    (int)($x['createdAt'] ?? round(microtime(true) * 1000))]);
+            }
+        }
+
         $pdo->commit();
         out(['ok'=>true,'message'=>'Database saved']);
+    }
+
+    /* --- PRODUCT Q&A: a shopper asks on the product page, the admin answers
+       from the new Questions tab. Only signed-in customers may ask. --- */
+    if ($action === 'ask_question') {
+        $authUser = requireAuth($pdo);
+        $data = bodyJson();
+        $productId = trim($data['productId'] ?? '');
+        $question  = trim($data['question'] ?? '');
+
+        if ($productId === '' || $question === '') {
+            out(['ok'=>false,'message'=>'Please type your question'], 400);
+        }
+        if (mb_strlen($question) > 600) {
+            out(['ok'=>false,'message'=>'Please keep the question under 600 characters'], 400);
+        }
+
+        try { ensureQuestionsTable($pdo); }
+        catch (Throwable $e) { out(['ok'=>false,'message'=>'Questions table could not be created: '.$e->getMessage()], 500); }
+
+        $qid = 'Q' . uniqid();
+        $stmt = $pdo->prepare("INSERT INTO product_questions(id, product_id, user_id, user_name, question, created_at) VALUES(?,?,?,?,?,?)");
+        $stmt->execute([$qid, $productId, $authUser['id'], $authUser['name'], $question, (int)round(microtime(true)*1000)]);
+
+        out(['ok'=>true, 'question'=>['id'=>$qid, 'productId'=>$productId, 'userId'=>$authUser['id'],
+            'userName'=>$authUser['name'], 'question'=>$question, 'answer'=>null, 'answeredAt'=>null,
+            'createdAt'=>(int)round(microtime(true)*1000)]]);
+    }
+
+    if ($action === 'answer_question') {
+        requireAdmin($pdo);
+        $data = bodyJson();
+        $id = trim($data['id'] ?? '');
+        $answer = trim($data['answer'] ?? '');
+        if ($id === '') out(['ok'=>false,'message'=>'Question id is required'], 400);
+
+        try { ensureQuestionsTable($pdo); }
+        catch (Throwable $e) { out(['ok'=>false,'message'=>'Questions table could not be created: '.$e->getMessage()], 500); }
+
+        if ($answer === '') {
+            $stmt = $pdo->prepare("UPDATE product_questions SET answer = NULL, answered_at = NULL WHERE id = ?");
+            $stmt->execute([$id]);
+        } else {
+            $stmt = $pdo->prepare("UPDATE product_questions SET answer = ?, answered_at = ? WHERE id = ?");
+            $stmt->execute([$answer, (int)round(microtime(true)*1000), $id]);
+        }
+        if ($stmt->rowCount() === 0) {
+            $check = $pdo->prepare("SELECT COUNT(*) FROM product_questions WHERE id = ?");
+            $check->execute([$id]);
+            if (!$check->fetchColumn()) out(['ok'=>false,'message'=>'That question no longer exists'], 404);
+        }
+        out(['ok'=>true]);
+    }
+
+    /* --- CODE-PART SYNC: write the catalogue the admin just edited back into
+       data/catalog.js, so the file on disk always matches what the admin panel
+       holds. Admin-only, and the previous file is kept as a .bak. --- */
+    if ($action === 'export_catalog') {
+        requireAdmin($pdo);
+        $data = bodyJson();
+        $cats = is_array($data['categories'] ?? null) ? $data['categories'] : [];
+        $prods = is_array($data['products'] ?? null) ? $data['products'] : [];
+        if (!$prods) {
+            out(['ok'=>false,'message'=>'There are no products to export'], 400);
+        }
+
+        $catRows = [];
+        $known = [];
+        foreach ($cats as $c) {
+            $id = (string)($c['id'] ?? '');
+            if ($id === '') continue;
+            $known[$id] = true;
+            $catRows[] = ['id'=>$id, 'name'=>(string)($c['name'] ?? ''),
+                          'coverImage'=>isset($c['coverImage']) && $c['coverImage'] !== '' ? (string)$c['coverImage'] : null];
+        }
+
+        $byCat = [];
+        $kept = 0;
+        foreach ($prods as $p) {
+            $catId = (string)($p['category'] ?? '');
+            if ($catId === '' || !isset($known[$catId])) continue;
+            $byCat[$catId][] = [
+                'id'            => (string)($p['id'] ?? ''),
+                'title'         => (string)($p['title'] ?? ''),
+                'price'         => (float)($p['price'] ?? 0),
+                'discountPrice' => (isset($p['discountPrice']) && $p['discountPrice'] !== null && $p['discountPrice'] !== '')
+                                    ? (float)$p['discountPrice'] : null,
+                'stock'         => (int)($p['stock'] ?? 0),
+                'colors'        => is_array($p['colors'] ?? null) ? array_values($p['colors']) : [],
+                'sizes'         => is_array($p['sizes'] ?? null) ? array_values($p['sizes']) : [],
+                'tags'          => is_array($p['tags'] ?? null) ? array_values($p['tags']) : [],
+                'description'   => (string)($p['description'] ?? ''),
+                'images'        => is_array($p['images'] ?? null) ? array_values($p['images']) : []
+            ];
+            $kept++;
+        }
+        if (!$kept) {
+            out(['ok'=>false,'message'=>'No product matched a known category — nothing was written'], 400);
+        }
+        foreach ($catRows as $c) { if (!isset($byCat[$c['id']])) $byCat[$c['id']] = []; }
+
+        $version = date('Y-m-d') . '-admin-' . time();
+        $flags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES;
+        $text = "// ============================================================\n"
+              . "// NOFRAME CATALOG DATA - GENERATED BY THE ADMIN PANEL\n"
+              . "// Written by api.php?action=export_catalog on " . date('Y-m-d H:i') . "\n"
+              . "// Edit products in the admin panel (Products tab), then press\n"
+              . "// \"Update data/catalog.js\" — edit this file by hand only if you\n"
+              . "// know the admin will overwrite it again.\n"
+              . "// ============================================================\n\n"
+              . "const CATALOG_VERSION = '" . $version . "';\n\n"
+              . "const STORE_CATEGORIES = " . json_encode($catRows, $flags) . ";\n\n"
+              . "const STORE_PRODUCTS = " . json_encode($byCat, $flags) . ";\n";
+
+        $path = dirname(__DIR__) . '/data/catalog.js';
+        if (is_file($path)) { @copy($path, dirname(__DIR__) . '/data/catalog.js.bak'); }
+        if (@file_put_contents($path, $text) === false) {
+            out(['ok'=>false,'message'=>'Could not write data/catalog.js — check the folder permissions'], 500);
+        }
+
+        out(['ok'=>true, 'version'=>$version, 'products'=>$kept, 'file'=>'data/catalog.js']);
     }
 
     /* --- ORDER PERSISTENCE (available to customers and guests) --- */
@@ -499,119 +780,25 @@ try {
         $shipping = json_encode($o['shipping'] ?? [], JSON_UNESCAPED_UNICODE);
         $createdAt = (int)($o['createdAt'] ?? round(microtime(true) * 1000));
 
-        $stmt = $pdo->prepare("INSERT INTO orders(id,user_id,items,subtotal,delivery,total,status,shipping,created_at)
-                               VALUES(?,?,?,?,?,?,?,?,?)
-                               ON DUPLICATE KEY UPDATE status=VALUES(status)");
-        $stmt->execute([$orderId, $userId, json_encode($items, JSON_UNESCAPED_UNICODE),
-            $subtotal, $delivery, $total, $status, $shipping, $createdAt]);
+        // A return request (customer-initiated from their order history) is
+        // stored on the same row, so the reason and note survive a reload.
+        $withReturn = returnColumnReady($pdo);
+        $retReq = isset($o['returnRequest']) && is_array($o['returnRequest']) ? $o['returnRequest'] : null;
+        $retJson = $retReq === null ? null : json_encode($retReq, JSON_UNESCAPED_UNICODE);
+        $withPay = paymentColumnReady($pdo);
+        $payReq = isset($o['payment']) && is_array($o['payment']) && $o['payment'] ? $o['payment'] : null;
+        $payJson = $payReq === null ? null : json_encode($payReq, JSON_UNESCAPED_UNICODE);
+
+        $stmt = $pdo->prepare("INSERT INTO orders(id,user_id,items,subtotal,delivery,total,status,shipping,created_at" . ($withReturn ? ",return_request" : "") . ($withPay ? ",payment" : "") . ")
+                               VALUES(?,?,?,?,?,?,?,?," . ($withReturn ? "?" : "") . ($withPay ? "?" : "") . ")
+                               ON DUPLICATE KEY UPDATE status=VALUES(status)" . ($withReturn ? ", return_request=VALUES(return_request)" : "") . ($withPay ? ", payment=VALUES(payment)" : ""));
+        $args = [$orderId, $userId, json_encode($items, JSON_UNESCAPED_UNICODE),
+            $subtotal, $delivery, $total, $status, $shipping, $createdAt];
+        if ($withReturn) $args[] = $retJson;
+        if ($withPay) $args[] = $payJson;
+        $stmt->execute($args);
 
         out(['ok'=>true,'success'=>true,'orderId'=>$orderId,'userId'=>$userId]);
-    }
-
-    /* --- GOOGLE SIGN-UP / SIGN-IN (Google Identity Services) ---
-       The ID token is verified against Google's tokeninfo endpoint, which
-       checks the signature, the issuer and that it was issued for OUR client
-       id. A token is never trusted from the request body alone. */
-    if ($action === 'google_auth') {
-        if (!defined('GOOGLE_CLIENT_ID') || GOOGLE_CLIENT_ID === '') {
-            out(['ok'=>false,'success'=>false,
-                 'message'=>'Google Sign-In is not configured: set GOOGLE_CLIENT_ID in api/config.php'], 503);
-        }
-
-        $data = bodyJson();
-        $credential = trim($data['credential'] ?? '');
-        if ($credential === '') {
-            out(['ok'=>false,'success'=>false,'message'=>'Missing Google credential'], 400);
-        }
-
-        $info = @file_get_contents('https://oauth2.googleapis.com/tokeninfo?id_token=' . urlencode($credential));
-        if ($info === false) {
-            out(['ok'=>false,'success'=>false,'message'=>'Could not verify the Google token'], 502);
-        }
-        $g = json_decode($info, true);
-        if (!is_array($g)) {
-            out(['ok'=>false,'success'=>false,'message'=>'Invalid Google token'], 401);
-        }
-
-        $audienceOk = (($g['aud'] ?? '') === GOOGLE_CLIENT_ID);
-        $issuerOk = isset($g['iss']) && strpos($g['iss'], 'accounts.google.com') !== false;
-        $emailVerified = in_array($g['email_verified'] ?? '', ['1', 'true'], true);
-        $notExpired = empty($g['exp']) || (int)$g['exp'] >= time();
-        if (!$audienceOk || !$issuerOk || !$emailVerified || !$notExpired) {
-            out(['ok'=>false,'success'=>false,'message'=>'Google token rejected (audience/issuer/expiry check failed)'], 401);
-        }
-
-        $email = strtolower(trim($g['email'] ?? ''));
-        $name = trim($g['name'] ?? '');
-        $avatar = trim($g['picture'] ?? '');
-        if ($email === '') {
-            out(['ok'=>false,'success'=>false,'message'=>'Google account has no email address'], 400);
-        }
-
-        $stmt = $pdo->prepare("SELECT u.id, u.name, u.email, u.role, u.created_at, p.avatar,
-                               p.phone, p.shipping_address, p.billing_address, p.account_status" .
-                               (hasColumn($pdo, 'users', 'discount_pin') ? ", u.discount_pin" : "") .
-                               " FROM users u LEFT JOIN user_profiles p ON u.id = p.user_id WHERE u.email = ?");
-        $stmt->execute([$email]);
-        $user = $stmt->fetch();
-        $isNew = false;
-
-        if (!$user) {
-            // First-time Google sign-up: role defaults to "customer" and a
-            // first-order discount PIN is stored with the account.
-            $isNew = true;
-            $userId = 'U' . uniqid();
-            $pinSql = hasColumn($pdo, 'users', 'discount_pin');
-            $discountPin = trim($data['discount_pin'] ?? '');
-            $pdo->beginTransaction();
-            if ($pinSql) {
-                $ins = $pdo->prepare("INSERT INTO users(id,name,email,password_hash,role,promo,discount_pin) VALUES(?,?,?,?,?,?,?)");
-                $ins->execute([$userId, $name !== '' ? $name : $email, $email,
-                    password_hash(bin2hex(random_bytes(24)), PASSWORD_BCRYPT), 'customer', 1, $discountPin !== '' ? $discountPin : null]);
-            } else {
-                $ins = $pdo->prepare("INSERT INTO users(id,name,email,password_hash,role,promo) VALUES(?,?,?,?,?,?)");
-                $ins->execute([$userId, $name !== '' ? $name : $email, $email,
-                    password_hash(bin2hex(random_bytes(24)), PASSWORD_BCRYPT), 'customer', 1]);
-            }
-            $pdo->prepare("INSERT INTO user_profiles(user_id,phone,shipping_address,billing_address,avatar,account_status)
-                           VALUES(?,?,'','',?,'Active Member')")
-                ->execute([$userId, '', $avatar !== '' ? $avatar : '/assets/u1.svg']);
-            $pdo->commit();
-            $stmt->execute([$email]);
-            $user = $stmt->fetch();
-        }
-
-        $jwtPayload = [
-            'sub' => $user['id'],
-            'name' => $user['name'],
-            'email' => $user['email'],
-            'avatar' => $user['avatar'] ?: ($avatar !== '' ? $avatar : '/assets/u1.svg'),
-            'role' => ($user['role'] ?? 'customer') === 'admin' ? 'admin' : 'authenticated'
-        ];
-        $token = jwtGenerate($jwtPayload, 86400);
-        setcookie('token', $token, [
-            'expires' => time() + 86400,
-            'path' => '/',
-            'httponly' => true,
-            'samesite' => 'Lax'
-        ]);
-
-        out([
-            'ok'=>true, 'success'=>true, 'isNew'=>$isNew, 'token'=>$token,
-            'message'=>$isNew ? 'Welcome to NoFrame' : 'Welcome back',
-            'user' => [
-                'id'=>$user['id'], 'name'=>$user['name'], 'email'=>$user['email'],
-                'role'=>$user['role'] ?? 'customer',
-                'phone'=>$user['phone'] ?? '',
-                'address'=>$user['shipping_address'] ?? '',
-                'shippingAddress'=>$user['shipping_address'] ?? '',
-                'billingAddress'=>$user['billing_address'] ?? '',
-                'avatar'=>$user['avatar'] ?? '/assets/u1.svg',
-                'accountStatus'=>$user['account_status'] ?? 'Active Member',
-                'createdAt'=>$user['created_at'],
-                'discountPin'=>$user['discount_pin'] ?? null
-            ]
-        ]);
     }
 
     out(['ok'=>false,'message'=>'Unknown action'], 400);
