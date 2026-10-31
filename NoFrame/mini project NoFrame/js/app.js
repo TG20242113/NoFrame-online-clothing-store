@@ -1624,15 +1624,13 @@ function renderListing(title, baseList){
 /* NO LEFTOVER CREDENTIALS: the sign-in form is always rendered empty, so a
    previous account's email or password can never appear on it again. */
 function clearAuthForm(){
-  const wipe = ()=>{
-    ['au-email','au-pass','au-name','au-phone','au-confirm-pass'].forEach(id=>{
-      const el = document.getElementById(id);
-      if(el){ el.value = ''; el.setAttribute('autocomplete','off'); }
-    });
-  };
-  wipe();
-  if(window.requestAnimationFrame) requestAnimationFrame(wipe);
-  setTimeout(wipe, 150);
+  // Clear only login credentials. Never wipe signup fields after render, and
+  // use explicit autocomplete purposes so the browser doesn't mix accounts.
+  if (!location.hash.replace('#/','').startsWith('login')) return;
+  ['au-email','au-pass'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.value = '';
+  });
 }
 
 function toggleCatFilter(id){ FILTER.catFilter.has(id)?FILTER.catFilter.delete(id):FILTER.catFilter.add(id); renderRoute(); }
@@ -2310,6 +2308,18 @@ async function startPayHerePayment(){
   form.submit();
 }
 
+
+async function handlePaymentReturn(orderId){
+  const order = DB.orders.find(o=>o.id===orderId);
+  if(!order){ $('#app').innerHTML='<div class="page wrap"><h2>Order not found</h2><a class="btn btn-primary" href="#/cart">Return to bag</a></div>'; return; }
+  // PayHere redirects to return_url after the gateway flow. The authoritative
+  // payment status must still be verified by the server notify callback.
+  SESSION.cart = [];
+  await saveSession();
+  renderHeader();
+  $('#app').innerHTML = `<div class="page wrap"><div class="order-success"><div class="check">✓</div><h1 class="page-title">Payment Flow Completed</h1><p style="margin:12px 0 20px;color:var(--ink-soft)">Your order <b class="mono">#${order.id}</b> has returned from PayHere. The final payment status is subject to gateway verification.</p><div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap"><a class="btn btn-outline" href="#/home">Continue Shopping</a><a class="btn btn-primary" href="#/profile/orders">View My Orders</a></div></div></div>`;
+}
+
 function renderOrderSuccess(orderId){
   const order = DB.orders.find(o=>o.id===orderId);
   if(!order){ $('#app').innerHTML=`<div class="page wrap"><p>Order not found.</p></div>`; return; }
@@ -2448,12 +2458,12 @@ function renderAuth(mode) {
         <button class="btn btn-primary btn-full" style="margin-top:20px;" onclick="doLogin()">Login to Account</button>
         <p class="helper-text">New here? Use the <b>Sign Up</b> tab above to create your account.</p>
       ` : `
-        <div class="form-row"><label>Full Name</label><input id="au-name" placeholder="Your full name" autocomplete="name"></div>
-        <div class="form-row"><label>Email Address</label><input id="au-email" type="email" placeholder="you@example.com" autocomplete="email"></div>
-        <div class="form-row"><label>Mobile Number</label><input id="au-phone" placeholder="+94 77 123 4567" autocomplete="off" inputmode="tel"></div>
+        <div class="form-row"><label>Full Name</label><input id="au-name" name="signup-full-name" placeholder="Your full name" autocomplete="section-signup name"></div>
+        <div class="form-row"><label>Email Address</label><input id="au-email" name="signup-email" type="email" placeholder="you@example.com" autocomplete="section-signup email"></div>
+        <div class="form-row"><label>Mobile Number</label><input id="au-phone" name="signup-mobile" type="tel" placeholder="+94 77 123 4567" autocomplete="section-signup tel" inputmode="tel"></div>
         <div class="form-row">
           <label>Password</label>
-          <input id="au-pass" type="password" placeholder="Create a strong password" autocomplete="new-password" oninput="updatePasswordComplexityUI(this.value)">
+          <input id="au-pass" name="signup-new-password" type="password" placeholder="Create a strong password" autocomplete="new-password" oninput="updatePasswordComplexityUI(this.value)">
           <div class="pw-meter">
             <div class="pw-bar-track"><div id="pw-bar-fill" class="pw-bar-fill"></div></div>
             <div id="pw-rules" class="pw-rules">
@@ -2465,7 +2475,7 @@ function renderAuth(mode) {
             </div>
           </div>
         </div>
-        <div class="form-row"><label>Confirm Password</label><input id="au-confirm-pass" type="password" placeholder="Continue your password" autocomplete="new-password"></div>
+        <div class="form-row"><label>Confirm Password</label><input id="au-confirm-pass" name="signup-confirm-password" type="password" placeholder="Re-enter your password" autocomplete="new-password"></div>
         <button class="btn btn-primary btn-full" style="margin-top:16px;" onclick="doSignup()">Create Account</button>
       `}
       </div>
@@ -4106,6 +4116,7 @@ function renderRoute(){
   else if(route==='checkout') renderCheckout();
   else if(route==='account') renderProfile(parts[1]);
   else if(route==='order-success') renderOrderSuccess(parts[1]);
+  else if(route==='payment-return') handlePaymentReturn(parts[1]);
   else if(route==='login') renderAuth('login');
   else if(route==='signup') renderAuth('signup');
   else if(route==='profile') renderProfile(parts[1]);

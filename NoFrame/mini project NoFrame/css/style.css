@@ -2405,3 +2405,11 @@ h1,h2,h3,h4,h5{font-family:var(--font-heading);letter-spacing:-.012em;text-wrap:
   padding:7px 12px;border-radius:999px;white-space:nowrap;
 }
 .header-admin-link:hover{background:var(--violet);border-color:var(--violet);}
+
+
+/* Signup form: more room for typing and comfortable spacing on all screens. */
+.auth-box{max-width:560px;padding:44px 46px 48px;}
+.auth-box .form-row{margin-bottom:30px;}
+.auth-box .form-row input{width:100%;box-sizing:border-box;min-height:60px;padding:18px 20px;font-size:16px;}
+.auth-box .pw-meter{padding-top:2px;}
+@media(max-width:600px){.auth-box{width:100%;max-width:none;box-sizing:border-box;padding:28px 22px 32px}.auth-box .form-row input{min-height:56px;padding:15px 16px}}
