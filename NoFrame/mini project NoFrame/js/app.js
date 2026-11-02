@@ -2824,7 +2824,7 @@ function renderProfile(tab) {
       <div class="form-row" style="grid-column:1/-1;">
         <label>Profile Photo <span style="font-weight:400;color:var(--ink-soft);">— optional, your choice</span></label>
         <div class="pf-photo">
-          <div class="pf-photo-preview" style="width:96px;height:96px;border-radius:50%;overflow:hidden;flex:0 0 96px;">
+          <div class="pf-photo-preview has-photo" style="width:96px;height:96px;border-radius:50%;overflow:hidden;flex:0 0 96px;">
             <img id="avatar-img" src="${u.avatar || '../assets/u1.svg'}" alt="${u.name}" onerror="this.src='../assets/u1.svg'">
           </div>
           <div class="pf-photo-tools">
