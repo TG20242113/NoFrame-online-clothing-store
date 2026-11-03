@@ -1386,6 +1386,24 @@ select.sort-select{
   box-shadow:0 6px 20px rgba(16,185,129,0.3);
 }
 
+/* Post-payment choices: the thank-you message reads first, then the two
+   buttons (home / exit) fade in so the shopper picks deliberately. */
+.os-prompt{color:var(--ink-soft);font-size:14px;margin-top:20px;}
+.os-actions{
+  display:flex;
+  gap:12px;
+  justify-content:center;
+  flex-wrap:wrap;
+  margin-top:14px;
+  animation:osActionsIn .45s ease 1.4s both;
+}
+.os-actions--now{animation:none;}
+@keyframes osActionsIn{
+  from{opacity:0;transform:translateY(8px);}
+  to{opacity:1;transform:none;}
+}
+@media(prefers-reduced-motion:reduce){.os-actions{animation:none;}}
+
 /* ---------- PROFILE & AUTH ---------- */
 /* Login scene: an articulated desk lamp in a dark room. Pushing the lamp (or
    simply touching the form) turns the light on — the beam sweeps in, the room

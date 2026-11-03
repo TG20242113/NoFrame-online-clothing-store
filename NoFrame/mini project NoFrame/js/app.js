@@ -2310,14 +2310,57 @@ async function startPayHerePayment(){
 
 
 async function handlePaymentReturn(orderId){
-  const order = DB.orders.find(o=>o.id===orderId);
-  if(!order){ $('#app').innerHTML='<div class="page wrap"><h2>Order not found</h2><a class="btn btn-primary" href="#/cart">Return to bag</a></div>'; return; }
-  // PayHere redirects to return_url after the gateway flow. The authoritative
-  // payment status must still be verified by the server notify callback.
+  // PayHere only lands on return_url once the gateway flow has ended, so the
+  // bag is emptied on every return — even when the order row never made it
+  // back into this browser's copy of the database. Treating a missing order as
+  // a dead end is what left paid items sitting in the cart.
+  const order = DB.orders.find(o=>o.id===orderId) || { id:orderId, shipping:{}, items:[], total:null };
   SESSION.cart = [];
   await saveSession();
   renderHeader();
-  $('#app').innerHTML = `<div class="page wrap"><div class="order-success"><div class="check">✓</div><h1 class="page-title">Payment Flow Completed</h1><p style="margin:12px 0 20px;color:var(--ink-soft)">Your order <b class="mono">#${order.id}</b> has returned from PayHere. The final payment status is subject to gateway verification.</p><div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap"><a class="btn btn-outline" href="#/home">Continue Shopping</a><a class="btn btn-primary" href="#/profile/orders">View My Orders</a></div></div></div>`;
+  renderPaymentThanks(order);
+}
+
+/* Payment finished: land on the thank-you message first, then reveal the two
+   choices the shopper asked for — back to the home page, or exit the site. */
+function renderPaymentThanks(order){
+  const email = (order.shipping && order.shipping.email) ? order.shipping.email : '';
+  $('#app').innerHTML = `
+  <div class="page wrap">
+    <div class="order-success">
+      <div class="check">✓</div>
+      <h1 class="page-title">Thank You For Your Payment!</h1>
+      <p style="margin:12px 0 6px;color:var(--ink-soft)">Your payment for order <b class="mono">#${order.id}</b> has been received successfully.</p>
+      ${email ? `<p style="color:var(--ink-soft);font-size:13.5px;margin-bottom:4px;">A confirmation has been sent to <b>${email}</b>. The final status is verified with the payment gateway.</p>` : `<p style="color:var(--ink-soft);font-size:13.5px;margin-bottom:4px;">The final status is verified with the payment gateway.</p>`}
+      <p class="os-prompt">Where would you like to go next?</p>
+      <div class="os-actions">
+        <a class="btn btn-primary" href="#/home">Go Back to Home Page</a>
+        <button class="btn btn-outline" type="button" onclick="exitSite()">Exit</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* Exit: close the window when the browser permits it (it only does for
+   script-opened windows), otherwise leave a farewell screen behind so the
+   shopper can close the tab whenever they choose. */
+function exitSite(){
+  window.close();
+  setTimeout(()=>{
+    $('#app').innerHTML = `
+    <div class="page wrap">
+      <div class="order-success">
+        <div class="check">✓</div>
+        <h1 class="page-title">Thank You for Shopping With NoFrame</h1>
+        <p style="color:var(--ink-soft);margin:12px 0 4px">Your session with us has ended safely.</p>
+        <p class="os-prompt">You can close this browser window or tab whenever you like.</p>
+        <div class="os-actions os-actions--now">
+          <a class="btn btn-primary" href="#/home">Go Back to Home Page</a>
+        </div>
+      </div>
+    </div>`;
+    renderHeader();
+  }, 400);
 }
 
 function renderOrderSuccess(orderId){
@@ -2338,9 +2381,10 @@ function renderOrderSuccess(orderId){
         <div class="track-step"><div class="dot"></div><span>Delivered</span></div>
       </div>
 
-      <div style="display:flex;gap:12px;justify-content:center;margin-top:32px;">
-        <a class="btn btn-outline" href="#/home">Continue Shopping</a>
-        <a class="btn btn-primary" href="#/profile/orders">View My Orders</a>
+      <p class="os-prompt" style="margin-top:28px;">Where would you like to go next?</p>
+      <div class="os-actions">
+        <a class="btn btn-primary" href="#/home">Go Back to Home Page</a>
+        <button class="btn btn-outline" type="button" onclick="exitSite()">Exit</button>
       </div>
     </div>
   </div>`;
